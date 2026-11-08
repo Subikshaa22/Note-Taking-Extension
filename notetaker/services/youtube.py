@@ -15,6 +15,7 @@ from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, Ret
 from notetaker.domain.identifiers import canonical_video_url
 from notetaker.domain.models import VideoMeta
 from notetaker.infra.rate_limiter import ServiceLimits
+from notetaker.services.faults import should_inject
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ class YouTubeClient:
 
     async def _extract(self, video_id: str, **extra) -> dict:
         await self._limits.youtube()
+        if should_inject(self._settings.fault_youtube_429_rate, "YouTube 429"):
+            raise RateLimitedError("youtube", "YouTube is throttling requests (injected).")
 
         def run() -> dict:
             with yt_dlp.YoutubeDL(self._options(**extra)) as ydl:

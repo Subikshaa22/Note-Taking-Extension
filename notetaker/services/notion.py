@@ -13,6 +13,7 @@ import httpx
 from notetaker.config import Settings
 from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
 from notetaker.infra.rate_limiter import ServiceLimits
+from notetaker.services.faults import should_inject
 
 log = logging.getLogger(__name__)
 
@@ -27,9 +28,12 @@ class NotionClient:
         self._http = http
         self._base = settings.notion_api_base.rstrip("/")
         self._auth_headers = {"Authorization": f"Bearer {token}", "Notion-Version": settings.notion_version}
+        self._fault_429_rate = settings.fault_notion_429_rate
 
     async def _request(self, method: str, path: str, *, json: Any = None, files: Any = None) -> dict:
         await self._limits.notion()
+        if should_inject(self._fault_429_rate, f"Notion 429 on {method} {path}"):
+            raise RateLimitedError("notion", "Notion rate limit reached (injected).", 2)
         headers = dict(self._auth_headers)
         if json is not None:
             headers["Content-Type"] = "application/json"

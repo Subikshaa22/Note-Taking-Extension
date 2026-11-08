@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from notetaker.config import Settings
 from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
 from notetaker.infra.rate_limiter import ServiceLimits, WaitCallback
+from notetaker.services.faults import should_inject
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ class GeminiClient:
 
     async def _generate_with(self, model: str, prompt: str, schema: type[T], on_wait: WaitCallback | None) -> T:
         await self._limits.llm(model, estimate_tokens(prompt), on_wait)
+        if should_inject(self._settings.fault_llm_429_rate, f"429 from {model}"):
+            raise RateLimitedError(f"llm:{model}", f"{model} rate limit reached (injected).", 5)
         try:
             response = await self._client.aio.models.generate_content(
                 model=model,

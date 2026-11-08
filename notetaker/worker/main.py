@@ -55,7 +55,7 @@ async def run() -> None:
     services = Services(
         youtube=YouTubeClient(settings, limits),
         transcripts=TranscriptClient(settings, limits),
-        frames=FrameGrabber(settings.frame_timeout_sec),
+        frames=FrameGrabber(settings.frame_timeout_sec, failure_rate=settings.fault_frame_failure_rate),
         llm=GeminiClient(settings, limits),
         limits=limits,
         http=http,

@@ -8,6 +8,7 @@ import io
 
 from PIL import Image, ImageStat
 
+from notetaker.services.faults import should_inject
 from notetaker.services.youtube import StreamInfo
 
 # A frame whose luminance barely varies (black/white transition, fade) carries no visual
@@ -36,11 +37,14 @@ def check_frame(image_bytes: bytes) -> tuple[int, int]:
 
 
 class FrameGrabber:
-    def __init__(self, timeout_sec: float, ffmpeg_bin: str = "ffmpeg"):
+    def __init__(self, timeout_sec: float, ffmpeg_bin: str = "ffmpeg", failure_rate: float = 0.0):
         self._timeout = timeout_sec
         self._ffmpeg = ffmpeg_bin
+        self._failure_rate = failure_rate
 
     async def grab(self, stream: StreamInfo, timestamp_sec: int) -> bytes:
+        if should_inject(self._failure_rate, f"frame failure at {timestamp_sec}s"):
+            raise FrameCaptureError("simulated capture failure")
         headers = "".join(f"{k}: {v}\r\n" for k, v in stream.http_headers.items())
         args = [
             self._ffmpeg,

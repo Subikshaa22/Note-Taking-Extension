@@ -145,3 +145,28 @@ async def test_notion_upload_image_two_step(limits):
 
     assert await _notion(limits, handler).upload_image("frame.jpg", b"jpeg") == "u1"
     assert calls == [("POST", "/v1/file_uploads"), ("POST", "/v1/file_uploads/u1/send")]
+
+
+# ---- Fault injection -------------------------------------------------------------------
+
+
+async def test_injected_frame_failure():
+    from notetaker.services.frames import FrameGrabber
+    from notetaker.services.youtube import StreamInfo
+
+    grabber = FrameGrabber(5, ffmpeg_bin="does-not-exist", failure_rate=1.0)
+    with pytest.raises(FrameCaptureError, match="simulated"):
+        await grabber.grab(StreamInfo(url="u", http_headers={}, height=None), 10)
+
+
+async def test_injected_notion_429(limits):
+    settings = Settings(_env_file=None, fault_notion_429_rate=1.0)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    with pytest.raises(RateLimitedError):
+        await NotionClient("t", settings, limits, http).retrieve_page("p")
+
+
+async def test_injected_llm_429_goes_through_rate_limit_path(limits):
+    client = GeminiClient(Settings(_env_file=None, gemini_api_key="k", fault_llm_429_rate=1.0), limits)
+    with pytest.raises(RateLimitedError):
+        await client.generate("prompt", Settings)

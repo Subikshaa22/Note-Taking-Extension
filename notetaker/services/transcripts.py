@@ -7,12 +7,14 @@ from notetaker.config import Settings
 from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
 from notetaker.domain.models import Transcript, TranscriptSegment
 from notetaker.infra.rate_limiter import ServiceLimits
+from notetaker.services.faults import should_inject
 
 
 class TranscriptClient:
     def __init__(self, settings: Settings, limits: ServiceLimits):
         self._languages = settings.transcript_languages
         self._limits = limits
+        self._fault_429_rate = settings.fault_youtube_429_rate
         self._api = yta.YouTubeTranscriptApi()
 
     def _fetch_sync(self, video_id: str) -> Transcript:
@@ -35,6 +37,8 @@ class TranscriptClient:
 
     async def fetch(self, video_id: str) -> Transcript:
         await self._limits.youtube()
+        if should_inject(self._fault_429_rate, "YouTube transcript 429"):
+            raise RateLimitedError("youtube", "YouTube rate-limited the transcript request (injected).")
         try:
             transcript = await asyncio.to_thread(self._fetch_sync, video_id)
         except (yta.TranscriptsDisabled, yta.NoTranscriptFound) as exc:

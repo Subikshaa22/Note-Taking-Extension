@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     notion_version: str = "2022-06-28"
     notion_timeout_sec: int = 30
 
+    # --- Fault injection for demos (probability 0..1 per call; 0 = off) -------------------
+    fault_llm_429_rate: float = 0.0
+    fault_notion_429_rate: float = 0.0
+    fault_youtube_429_rate: float = 0.0
+    fault_frame_failure_rate: float = 0.0
+
     @field_validator("cors_allow_origins", "transcript_languages", "retry_delays_sec", mode="before")
     @classmethod
     def _csv(cls, value):
