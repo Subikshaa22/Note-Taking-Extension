@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+
+# Prototype output
+result*.txt
+
+# Assignment brief (kept locally, not versioned)
+Note Taking agent.pdf
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
