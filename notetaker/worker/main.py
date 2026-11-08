@@ -19,6 +19,7 @@ from notetaker.infra.crypto import TokenCipher, TokenCipherError
 from notetaker.infra.job_store import JobStore
 from notetaker.infra.rate_limiter import RateLimiter, ServiceLimits
 from notetaker.infra.redis_client import create_redis
+from notetaker.infra.startup import retry_until_ready
 from notetaker.logging_setup import configure_logging
 from notetaker.pipeline.context import Services
 from notetaker.services.frames import FrameGrabber
@@ -30,17 +31,6 @@ from notetaker.worker.processor import StageProcessor
 log = logging.getLogger("notetaker.worker")
 
 _SHUTDOWN_GRACE_SEC = 25
-
-
-async def retry_until_ready(name: str, connect, attempts: int = 30, delay_sec: float = 2.0):
-    for attempt in range(1, attempts + 1):
-        try:
-            return await connect()
-        except Exception as exc:
-            if attempt == attempts:
-                raise
-            log.warning("%s not reachable yet (%s); retrying in %.0fs", name, type(exc).__name__, delay_sec)
-            await asyncio.sleep(delay_sec)
 
 
 def build_limits(redis, settings: Settings) -> ServiceLimits:
