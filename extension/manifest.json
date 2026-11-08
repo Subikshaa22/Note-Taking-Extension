@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Video Notes for Notion",
+  "version": "1.0.0",
+  "description": "Turn YouTube videos into study notes with real video frames, published to Notion.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2njtjB0MZK07CpBWq4kB8zyKXTy+OUaNMJkIGMfZco/kRJ+IpbFvCvuV7sEVK3yUGzlujCz+dABF6T2aAsqfwQXZhDMGR2SbCnoMEHGo/DRjnyHoofFIPI1asIw+ck1QrIrFdts5XInPyOJ02EacugE2REafTKyxMobi9+m5AqdbNoR6oRJHFLKkSkUrX7PuIuRGuECSG2/30rMyZyDE6GWNTs1tEOHWzlr+b3v1QgjkpI+2K6AuEkSWQyGJJCN6JXrBzTCdj1aWPEqyL3hE0zs3zeAd4P0P5uy0a1VlvYxHS/1J9JAVN7x6suZ6GOj/28ZRWP1xrGpqmvFdoVZvXQIDAQAB",
+  "permissions": ["storage", "identity", "alarms", "notifications"],
+  "host_permissions": ["https://www.youtube.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Video Notes",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

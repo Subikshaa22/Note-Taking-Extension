@@ -1,0 +1,79 @@
+/* "Take Notes" button inside YouTube's player toolbar, and the confirmation toast. */
+
+.vn-take-notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  margin: auto 6px;
+  padding: 0 12px 0 10px;
+  align-self: center;
+  border: 0;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: 500 13px/1 "Roboto", "Arial", sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  vertical-align: top;
+  transition: background 0.15s ease;
+}
+
+.vn-take-notes:hover,
+.vn-take-notes:focus-visible {
+  background: rgba(255, 255, 255, 0.28);
+  outline: none;
+}
+
+.vn-take-notes:focus-visible {
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.vn-take-notes[data-state="sending"] {
+  opacity: 0.75;
+  cursor: progress;
+}
+
+.vn-take-notes[data-state="done"] {
+  background: rgba(34, 197, 94, 0.85);
+}
+
+.vn-take-notes[data-state="error"] {
+  background: rgba(239, 68, 68, 0.85);
+}
+
+/* Narrow players: icon only. */
+.ytp-small-mode .vn-take-notes .vn-label {
+  display: none;
+}
+
+.ytp-small-mode .vn-take-notes {
+  padding: 0 8px;
+}
+
+#vn-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 72px;
+  z-index: 70;
+  max-width: min(480px, 90%);
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(28, 28, 28, 0.92);
+  color: #fff;
+  font: 400 14px/1.4 "Roboto", "Arial", sans-serif;
+  text-align: center;
+  transform: translate(-50%, 8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#vn-toast[data-kind="error"] {
+  background: rgba(153, 27, 27, 0.95);
+}
+
+#vn-toast.vn-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
