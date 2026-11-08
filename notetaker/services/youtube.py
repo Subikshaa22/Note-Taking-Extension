@@ -5,6 +5,7 @@ RabbitMQ heartbeats it services) responsive.
 """
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 
 import yt_dlp
@@ -19,7 +20,9 @@ log = logging.getLogger(__name__)
 
 _UNAVAILABLE_MARKERS = (
     "private video",
+    "video is private",
     "video unavailable",
+    "video is unavailable",
     "this video has been removed",
     "this video is not available",
     "members-only",
@@ -101,9 +104,12 @@ class YouTubeClient:
             f"/bv*[protocol=https]/b"
         )
         info = await self._extract(video_id, format=selector)
-        url = info.get("url")
-        if not url and info.get("requested_formats"):
-            url = info["requested_formats"][0].get("url")
-        if not url:
+        fmt = info if info.get("url") else (info.get("requested_formats") or [{}])[0]
+        if not fmt.get("url"):
             raise RetryableError(ErrorCode.YOUTUBE_FAILED, "No downloadable video stream was found.")
-        return StreamInfo(url=url, http_headers=dict(info.get("http_headers") or {}), height=info.get("height"))
+        # Some player clients hand out URLs that answer 403 until `available_at` (a few
+        # seconds after extraction); yt-dlp's own downloader sleeps for the same reason.
+        available_at = fmt.get("available_at") or info.get("available_at")
+        if available_at:
+            await asyncio.sleep(max(0.0, float(available_at) - time.time()) + 0.5)
+        return StreamInfo(url=fmt["url"], http_headers=dict(fmt.get("http_headers") or {}), height=fmt.get("height"))
