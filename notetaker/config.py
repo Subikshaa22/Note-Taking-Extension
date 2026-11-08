@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     job_ttl_sec: int = 7 * 24 * 3600
     max_attempts: int = 5
     retry_delays_sec: Annotated[list[int], NoDecode] = [10, 30, 90]
-    lease_ttl_sec: int = 20
+    lease_ttl_sec: int = 10
     worker_concurrency: int = 1
     # RabbitMQ-side safety net against messages that crash every worker before they can
     # record an attempt (poison messages). Kept well above max_attempts.

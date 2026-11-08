@@ -31,6 +31,10 @@ class JobStatusResponse(BaseModel):
     # doing right now, and when it will retry if it is waiting out a backoff.
     detail: str | None
     retry: RetryInfo | None
+    # Which worker last claimed the job and how many attempts the current stage has used;
+    # makes crash recovery visible (the id changes when another worker takes over).
+    worker_id: str | None
+    attempt: int
     created_at: str
     updated_at: str
     history: list[dict] | None = None
