@@ -1,0 +1,70 @@
+# Full backend: broker, state store, API gateway and a pool of workers.
+#   docker compose up --build                 # 2 workers by default
+#   docker compose up -d --scale worker=4     # scale the pool
+#   docker kill notetaker-worker-1            # crash a worker mid-job (SIGKILL)
+name: notetaker
+
+x-app: &app
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    AMQP_URL: ${AMQP_URL:-amqp://notes:notes@rabbitmq:5672/}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    hostname: rabbitmq  # RabbitMQ keys its on-disk state by node name; keep it stable
+    environment:
+      RABBITMQ_DEFAULT_USER: notes
+      RABBITMQ_DEFAULT_PASS: notes
+    ports:
+      - "15672:15672"  # management UI (inspect queues and the DLQ), login notes / notes
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  gateway:
+    <<: *app
+    build:
+      context: .
+      target: gateway
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+
+  worker:
+    <<: *app
+    build:
+      context: .
+      target: worker
+    deploy:
+      replicas: 2
+    stop_grace_period: 30s
+
+volumes:
+  rabbitmq-data:
+  redis-data:
