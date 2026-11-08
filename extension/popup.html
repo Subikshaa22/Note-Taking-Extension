@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Notes</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <img src="icons/icon32.png" alt="" width="20" height="20" />
+        <span>Video Notes</span>
+      </div>
+      <button id="open-settings" class="icon-button" type="button" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.47.47 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61l-2.01-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z"/>
+        </svg>
+      </button>
+    </header>
+
+    <section id="notion-card" class="card notion-card" aria-live="polite"></section>
+
+    <section id="current-video" class="card current-video" hidden>
+      <div class="current-video-text">
+        <span class="eyebrow">On this tab</span>
+        <span id="current-video-title" class="current-video-title"></span>
+      </div>
+      <button id="take-notes-here" class="button primary" type="button">Take Notes</button>
+    </section>
+
+    <section class="jobs-section">
+      <div class="section-head">
+        <h2>Your notes</h2>
+        <button id="clear-finished" class="link-button" type="button" hidden>Clear finished</button>
+      </div>
+      <ol id="jobs" class="jobs" aria-live="polite"></ol>
+      <p id="empty" class="empty" hidden>
+        Open a YouTube video and press <strong>Take Notes</strong> in the player toolbar. Progress shows up here.
+      </p>
+    </section>
+
+    <template id="job-template">
+      <li class="job">
+        <div class="job-head">
+          <div class="job-title-wrap">
+            <span class="job-title"></span>
+            <span class="job-meta"></span>
+          </div>
+          <button class="icon-button dismiss" type="button" title="Remove from list" aria-label="Remove from list">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+          </button>
+        </div>
+        <ol class="steps"></ol>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="progress-fill"></div></div>
+        <p class="activity"></p>
+        <div class="notice warning" hidden>
+          <strong class="notice-title"></strong>
+          <ul class="notice-list"></ul>
+        </div>
+        <div class="notice error" hidden>
+          <strong class="notice-title"></strong>
+          <p class="notice-text"></p>
+        </div>
+        <a class="button primary view-notion" target="_blank" rel="noopener" hidden>View in Notion</a>
+      </li>
+    </template>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

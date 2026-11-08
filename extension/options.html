@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Notes — Settings</title>
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body class="options">
+    <header class="topbar">
+      <div class="brand">
+        <img src="icons/icon32.png" alt="" width="22" height="22" />
+        <span>Video Notes — Settings</span>
+      </div>
+    </header>
+
+    <form id="settings-form" class="card" novalidate>
+      <h2>Notes server</h2>
+      <label for="gateway-url">Gateway address</label>
+      <input id="gateway-url" type="url" placeholder="http://localhost:8000" autocomplete="off" required />
+      <p class="help">Where the note-taking backend runs. The default matches <code>docker compose up</code>.</p>
+      <div class="row">
+        <button id="test-connection" class="button" type="button">Test connection</button>
+        <span id="connection-result" class="result" role="status"></span>
+      </div>
+
+      <h2>Notion destination</h2>
+      <label for="parent-id">Parent page or database (optional)</label>
+      <input id="parent-id" type="text" placeholder="https://www.notion.so/My-Notes-0123456789abcdef…" autocomplete="off" />
+      <p class="help">
+        Paste a Notion page link or id. Notes are created inside it. Leave empty to use the server's default: the
+        page set in <code>NOTION_DEFAULT_PARENT_ID</code>, otherwise the most recently edited top-level page you shared
+        with the integration.
+      </p>
+
+      <div class="row">
+        <button class="button primary" type="submit">Save settings</button>
+        <span id="save-result" class="result" role="status"></span>
+      </div>
+    </form>
+
+    <form id="token-form" class="card" novalidate>
+      <h2>Notion access</h2>
+      <p id="auth-state" class="help"></p>
+      <p class="help">
+        Prefer <strong>Connect Notion</strong> in the popup (one-time sign-in). If the server has no OAuth app
+        configured, paste an internal integration secret instead (Notion → Settings → Connections → Develop or manage
+        integrations), and share your destination page with that integration.
+      </p>
+      <label for="manual-token">Integration secret</label>
+      <input id="manual-token" type="password" placeholder="ntn_…" autocomplete="off" />
+      <div class="row">
+        <button class="button" type="submit">Use this token</button>
+        <span id="token-result" class="result" role="status"></span>
+      </div>
+      <p class="help small">OAuth redirect URI for your Notion integration: <code id="redirect-uri"></code></p>
+    </form>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
