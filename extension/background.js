@@ -131,6 +131,10 @@ async function refreshJob(job) {
     result: status.result,
     connectionProblem: null,
   };
+  // Remember when the current step started, so the popup can show how long it has been running.
+  if (!job.detailSince || job.status !== status.status || job.detail !== status.detail) {
+    patch.detailSince = Date.now();
+  }
   if (isTerminal(status.status)) {
     // The results endpoint is the canonical outcome (and returns 409 until terminal).
     try {
@@ -150,7 +154,7 @@ function notifyFinished(job) {
   const title = job.title || "Your video";
   const messages = {
     COMPLETED: ["Notes ready", `${title} is in Notion.`],
-    COMPLETED_WITH_WARNINGS: ["Notes ready (with warnings)", `${title} is in Notion; some frames were left out.`],
+    COMPLETED_WITH_WARNINGS: ["Notes ready", `${title} is in Notion.`],
     FAILED: ["Couldn't take notes", `${title}: ${job.error?.message || "the job failed."}`],
     DEAD_LETTERED: ["Couldn't take notes", `${title}: gave up after several attempts.`],
   };

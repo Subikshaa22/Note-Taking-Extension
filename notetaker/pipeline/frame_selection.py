@@ -164,6 +164,7 @@ async def select_frames(
     language: str,
     timeout_sec: float,
     on_wait: WaitCallback | None = None,
+    on_status=None,
 ) -> list[FrameSuggestion]:
     # Decoding and labelling a few hundred JPEGs takes seconds of CPU: keep it off the event loop.
     parts = await asyncio.to_thread(
@@ -171,5 +172,7 @@ async def select_frames(
     )
     # Medium resolution (~530 tokens per 640x360 sample) keeps board writing legible while
     # costing half of the default; 240 samples then fit well inside a 250k TPM budget.
-    plan = await llm.generate_from_parts(parts, VisualPlan, on_wait, timeout_sec, image_resolution="medium")
+    plan = await llm.generate_from_parts(
+        parts, VisualPlan, on_wait, timeout_sec, image_resolution="medium", on_status=on_status
+    )
     return validate_visual_frames(plan.frames, [f.timestamp_sec for f in scan], max_frames)

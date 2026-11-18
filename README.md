@@ -135,7 +135,8 @@ its default.
 | `MAX_VIDEO_DURATION_SEC` | `1200` | Constraint A: longer videos are rejected. |
 | `MAX_FRAMES` / `MIN_FRAME_GAP_SEC` | `15` / `10` | Frame budget per video, and minimum spacing between transcript-chosen frames. |
 | `FRAME_SELECTION` | `visual` | `visual`: scan the video and let the vision model pick, for each board/slide state, the moment where it is most complete and least blocked by the presenter. `transcript`: pick moments from the transcript only (faster, no vision call). Either way the published images are real, unedited frames. |
-| `FRAME_SCAN_INTERVAL_SEC` / `FRAME_SCAN_MAX_IMAGES` | `5` / `240` | Sampling interval of the visual scan; the interval grows if the video would need more samples than the cap. |
+| `FRAME_SCAN_INTERVAL_SEC` / `FRAME_SCAN_MAX_IMAGES` | `10` / `120` | Sampling interval of the visual scan; the interval grows if the video would need more samples than the cap. |
+| `FRAME_SELECTION_TIMEOUT_SEC` / `VISUAL_SELECTION_ATTEMPTS` | `240` / `1` | Time limit for the vision call that picks frames, and how many stage attempts may try it when the model times out or is overloaded. After that the transcript-chosen frames are used (with a warning), so a busy model can't hold a job for long. A 429 is always re-queued with backoff instead. |
 | `FRAME_SCAN_HEIGHT` / `FRAME_SCAN_TIMEOUT_SEC` | `360` / `600` | Resolution of the scan samples (only the model sees them) and time limit for the scan. |
 | `LLM_CHUNK_CHARS` | `60000` | Transcripts longer than this are summarised in chunks and merged. |
 | `NOTES_LANGUAGE` | `English` | Language the notes are written in. |
@@ -143,10 +144,11 @@ its default.
 | `FRAME_MAX_HEIGHT` / `FRAME_TIMEOUT_SEC` / `FRAME_CONCURRENCY` | `720` / `45` / `3` | Frame capture tuning. |
 | `YTDLP_COOKIES_FILE` | *(empty)* | Cookies file for YouTube if it asks the server to sign in. |
 | `JOB_TTL_SEC` | `604800` | How long job state is kept (7 days). |
+| `VIDEO_CACHE_TTL_SEC` | `604800` | **Per-video cache.** Submitting a video that was processed before reuses its transcript, notes, frame choice and screenshots, so it takes seconds; a new Notion page is still created. Setting changes (language, frame mode, model...) invalidate it. A frame choice that fell back to the transcript is not cached. `0` turns the cache off. |
 | `GATEWAY_PORT` | `8000` | Host port for the gateway. |
 | `FAULT_*_RATE` | `0` | Opt-in fault injection for demos (see below). |
 
-Advanced settings you rarely need to change: `LLM_TIMEOUT_SEC` (120), `LLM_TEMPERATURE` (0.2),
+Advanced settings you rarely need to change: `LLM_TIMEOUT_SEC` (300; it is also sent to Gemini as its server-side deadline, so a low value causes 504 "Deadline expired" errors on long videos), `LLM_TEMPERATURE` (0.2),
 `NOTION_VERSION` (`2022-06-28`), `NOTION_API_BASE`, `NOTION_TIMEOUT_SEC` (30), `QUEUE_DELIVERY_LIMIT` (20, a
 RabbitMQ-side guard against poison messages), `IDEMPOTENCY_TTL_SEC` (86400), `CORS_ALLOW_ORIGINS` (`*`) and
 `LOG_LEVEL` (`INFO`).
@@ -163,12 +165,14 @@ RabbitMQ-side guard against poison messages), `IDEMPOTENCY_TTL_SEC` (86400), `CO
 
 Scale the pool with `docker compose up -d --scale worker=4`.
 
+> **Demo tip:** a video you already processed finishes in seconds because of the per-video cache, which is too fast to kill a worker mid-job. Use a new video, or set `VIDEO_CACHE_TTL_SEC=0` and run `docker compose up -d` before the crash and 429 demos.
+
 ## Development
 
 ```bash
 py -3.12 -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt   # Windows
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt     # macOS/Linux
-.venv/Scripts/python -m pytest        # 131 tests; no Docker or network needed
+.venv/Scripts/python -m pytest        # 145 tests; no Docker or network needed
 ```
 
 To run the services outside Docker, start RabbitMQ and Redis, point `AMQP_URL` / `REDIS_URL` at them, and run

@@ -135,6 +135,7 @@ async function renderCurrentTab() {
 // ---- Jobs ------------------------------------------------------------------------------
 
 let currentJobs = [];
+const openNotes = new Set();
 
 function renderSteps(list, job) {
   const failed = job.status === "FAILED" || job.status === "DEAD_LETTERED";
@@ -183,11 +184,14 @@ function renderJob(job) {
 
   const warnings = job.warnings || [];
   if (warnings.length && isTerminal(job.status)) {
-    const box = $(".notice.warning", node);
+    // Warnings are informational (the page was published): a small, collapsed note, not an alert.
+    const box = $(".job-notes", node);
     box.hidden = false;
-    $(".notice-title", box).textContent =
-      warnings.length === 1 ? "Completed with 1 warning" : `Completed with ${warnings.length} warnings`;
-    $(".notice-list", box).replaceChildren(...warnings.map((w) => el("li", { textContent: describeWarning(w) })));
+    // The list is rebuilt on every status update; keep a note the user opened open.
+    box.open = openNotes.has(job.jobId);
+    box.addEventListener("toggle", () => (box.open ? openNotes.add(job.jobId) : openNotes.delete(job.jobId)));
+    $(".job-notes-title", box).textContent = warnings.length === 1 ? "1 note about this page" : `${warnings.length} notes about this page`;
+    $(".job-notes-list", box).replaceChildren(...warnings.map((w) => el("li", { textContent: describeWarning(w) })));
   }
 
   if (job.status === "FAILED" || job.status === "DEAD_LETTERED") {
@@ -216,10 +220,10 @@ function renderJobs(jobs) {
   $("#clear-finished").hidden = !jobs.some((j) => isTerminal(j.status));
 }
 
-// Keeps the "retrying in Ns" countdown current without rebuilding the list.
+// Keeps retry countdowns and "(2m 10s)" step timers current without rebuilding the list.
 function refreshCountdowns() {
   for (const job of currentJobs) {
-    if (!job.retry) continue;
+    if (isTerminal(job.status) || job.connectionProblem) continue;
     const node = document.querySelector(`.job[data-job-id="${CSS.escape(job.jobId)}"] .activity`);
     if (node) node.textContent = activityText(job);
   }

@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # --- Jobs, retries and the dead-letter queue -----------------------------------
     max_video_duration_sec: int = 20 * 60
     job_ttl_sec: int = 7 * 24 * 3600
+    # Per-video cache (transcript, notes, frame choice, frame images) so the same video is fast
+    # the second time. 0 turns it off (e.g. to demo the full pipeline on a video used before).
+    video_cache_ttl_sec: int = 7 * 24 * 3600
     max_attempts: int = 5
     retry_delays_sec: Annotated[list[int], NoDecode] = [10, 30, 90]
     lease_ttl_sec: int = 10
@@ -44,7 +47,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     llm_model: str = "gemini-3.5-flash"
     llm_fallback_model: str = ""
-    llm_timeout_sec: int = 120
+    # Also sent to Gemini as its server-side deadline (X-Server-Timeout): too low and Gemini
+    # answers 504 "Deadline expired" on long transcripts. Notes for a 20-min video can take ~2 min.
+    llm_timeout_sec: int = 300
     llm_temperature: float = 0.2
     # Transcripts longer than this many characters are split into chunks (map/reduce).
     llm_chunk_chars: int = 60_000
@@ -68,10 +73,17 @@ class Settings(BaseSettings):
     # for every state of the board/slides, the moment where the content is most complete and
     # least blocked by the presenter. "transcript": trust the transcript-based suggestions only.
     frame_selection: str = "visual"
-    frame_scan_interval_sec: int = 5
-    frame_scan_max_images: int = 240
+    frame_scan_interval_sec: int = 10
+    frame_scan_max_images: int = 120
     frame_scan_height: int = 360
     frame_scan_timeout_sec: int = 600
+    # Time limit for the vision call that picks the frames. It sends up to FRAME_SCAN_MAX_IMAGES
+    # images, so it gets longer than a text call, but an overloaded model should not hold the job.
+    frame_selection_timeout_sec: int = 240
+    # How many stage attempts may try the vision call when it fails for a reason other than a
+    # rate limit (timeout, 503 overload). After that the transcript-based frames are used.
+    # 1 = fall back on the first failure (fastest); 429s are always re-queued with backoff.
+    visual_selection_attempts: int = 1
 
     # --- Notion ---------------------------------------------------------------------
     notion_client_id: str = ""
@@ -109,7 +121,8 @@ class Settings(BaseSettings):
 
     @field_validator(
         "max_attempts", "worker_concurrency", "max_frames", "llm_rpm", "notion_rps", "youtube_rpm",
-        "frame_scan_interval_sec", "frame_scan_max_images",
+        "frame_scan_interval_sec", "frame_scan_max_images", "frame_selection_timeout_sec",
+        "visual_selection_attempts",
     )
     @classmethod
     def _at_least_one(cls, value: int) -> int:

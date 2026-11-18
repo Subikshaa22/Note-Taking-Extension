@@ -67,9 +67,11 @@ export function describeWarning(warning) {
   const at = warning.timestamp_sec != null ? ` at ${formatClock(warning.timestamp_sec)}` : "";
   switch (warning.code) {
     case "FRAME_EXTRACTION_FAILED":
-      return `The frame${at} couldn't be captured, so it was left out.`;
+      return `One screenshot${at} was skipped.`;
     case "FRAME_UPLOAD_FAILED":
-      return `The frame${at} couldn't be uploaded to Notion, so it was left out.`;
+      return `One screenshot${at} couldn't be added to Notion and was skipped.`;
+    case "VISUAL_SELECTION_UNAVAILABLE":
+      return "Screenshot moments were picked from the transcript (Gemini was busy).";
     default:
       return warning.message || "A non-critical issue occurred.";
   }
@@ -83,17 +85,44 @@ export function formatClock(totalSeconds) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
 
+// The server's retry reason is technical ("LLM service error 504: ..."); turn the common
+// Gemini cases into plain words instead of the generic "had a hiccup".
+function retryReason(retry) {
+  const raw = retry.reason || "";
+  if (retry.reason_code === "LLM_FAILED") {
+    if (/504|timeout|deadline/i.test(raw)) return "Gemini (the AI service) took too long to answer";
+    if (/503|high demand|overloaded/i.test(raw)) return "Gemini (the AI service) is overloaded right now";
+  }
+  return RETRY_REASONS[retry.reason_code] || "a temporary problem";
+}
+
+// Steps that wait on one long Gemini call. After this long, say so instead of looking stuck.
+const SLOW_AFTER_SEC = 90;
+
+function isGeminiStep(job) {
+  return job.status === "SUMMARIZING" || /choosing the clearest moments|backup model/i.test(job.detail || "");
+}
+
+export function formatElapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
 export function describeActivity(job, now = Date.now()) {
   if (job.retry) {
     const seconds = Math.max(0, Math.round((Date.parse(job.retry.next_attempt_at) - now) / 1000));
-    const reason = RETRY_REASONS[job.retry.reason_code] || "a temporary problem";
     const when = seconds > 0 ? `in ${seconds}s` : "now";
-    return `Waiting — retrying ${when} because ${reason} (attempt ${job.retry.attempt + 1} of ${job.retry.max_attempts}).`;
+    return `Waiting — retrying ${when} because ${retryReason(job.retry)} (attempt ${job.retry.attempt + 1} of ${job.retry.max_attempts}).`;
   }
   if (job.status === "QUEUED") return "Waiting for a free worker…";
   if (job.status === "COMPLETED") return "Your notes are ready.";
-  if (job.status === "COMPLETED_WITH_WARNINGS") return "Your notes are ready, with a few gaps.";
-  return job.detail ? `${job.detail}…` : `${STEPS[stepIndex(job.status)].label}…`;
+  if (job.status === "COMPLETED_WITH_WARNINGS") return "Your notes are ready.";
+  const text = job.detail ? `${job.detail}…` : `${STEPS[stepIndex(job.status)].label}…`;
+  if (!job.detailSince || isTerminal(job.status)) return text;
+  const elapsed = (now - job.detailSince) / 1000;
+  if (elapsed < 10) return text;
+  const slow = isGeminiStep(job) && elapsed >= SLOW_AFTER_SEC ? " Gemini is slower than usual right now; still waiting for it." : "";
+  return `${text} (${formatElapsed(elapsed)})${slow}`;
 }
 
 export function timeAgo(timestamp, now = Date.now()) {

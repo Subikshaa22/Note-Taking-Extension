@@ -8,6 +8,7 @@ from notetaker.config import Settings
 from notetaker.domain.models import Job
 from notetaker.domain.status import JobStatus
 from notetaker.infra.job_store import JobStore
+from notetaker.infra.video_cache import VideoCache
 from notetaker.infra.lease import JobLease
 from notetaker.infra.rate_limiter import ServiceLimits
 from notetaker.services.frames import FrameGrabber
@@ -55,6 +56,10 @@ class StageContext:
     @property
     def job_id(self) -> str:
         return self.job.job_id
+
+    @property
+    def cache(self) -> VideoCache:
+        return VideoCache(self.store.redis, self.settings)
 
     @property
     def is_last_attempt(self) -> bool:

@@ -69,6 +69,10 @@ class JobStore:
         self._ttl = ttl_sec
         self._transition = redis.register_script(_TRANSITION_LUA)
 
+    @property
+    def redis(self) -> Redis:
+        return self._redis
+
     @staticmethod
     def _key(job_id: str, suffix: str = "") -> str:
         return f"job:{job_id}{':' + suffix if suffix else ''}"

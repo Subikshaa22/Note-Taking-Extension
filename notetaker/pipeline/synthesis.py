@@ -194,7 +194,7 @@ async def synthesize(
             frame_rules=_FRAME_RULES.format(first_ts=0, last_ts=max(duration - 1, 0), min_gap=min_gap_sec, language=language),
             transcript=format_transcript(chunks[0]),
         )
-        notes = await llm.generate(prompt, Notes, on_wait)
+        notes = await llm.generate(prompt, Notes, on_wait, on_status=report)
     else:
         sections: list[Section] = []
         frames: list[FrameSuggestion] = []
@@ -213,7 +213,7 @@ async def synthesize(
                 frame_rules=_FRAME_RULES.format(first_ts=first_ts, last_ts=last_ts, min_gap=min_gap_sec, language=language),
                 transcript=format_transcript(chunk),
             )
-            part = await llm.generate(prompt, PartialNotes, on_wait)
+            part = await llm.generate(prompt, PartialNotes, on_wait, on_status=report)
             sections.extend(normalize_sections(part.sections, duration))
             frames.extend(part.frames)
 
@@ -222,7 +222,9 @@ async def synthesize(
             f"[{format_timestamp(s.start_sec)}] {s.heading}\n" + "\n".join(f"  - {b}" for b in s.bullets)
             for s in sections
         )
-        overview = await llm.generate(_REDUCE_PROMPT.format(**common, outline=outline), NotesOverview, on_wait)
+        overview = await llm.generate(
+            _REDUCE_PROMPT.format(**common, outline=outline), NotesOverview, on_wait, on_status=report
+        )
         notes = Notes(
             title=overview.title,
             summary=overview.summary,

@@ -10,7 +10,7 @@ from notetaker.config import Settings
 from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
 from notetaker.infra.rate_limiter import RateLimiter, ServiceLimits
 from notetaker.services.frames import FrameCaptureError, check_frame
-from notetaker.services.llm import GeminiClient, estimate_tokens
+from notetaker.services.llm import GeminiClient, describe_llm_failure, estimate_tokens
 from notetaker.services.notion import NotionClient, NotionNotFound
 from notetaker.services.youtube import classify_ytdlp_error
 
@@ -120,6 +120,33 @@ async def test_daily_quota_on_primary_still_tries_fallback(limits, monkeypatch):
     with pytest.raises(RetryableError):  # the fallback's transient error wins: it may clear up
         await client.generate("p", BaseModel)
     assert calls == ["a", "b"]
+
+
+async def test_switching_to_fallback_model_is_reported(limits, monkeypatch):
+    settings = Settings(_env_file=None, gemini_api_key="k", llm_model="a", llm_fallback_model="b")
+    client = GeminiClient(settings, limits)
+    statuses = []
+
+    async def fake(model, *args):
+        if model == "a":
+            raise RetryableError(ErrorCode.LLM_FAILED, "LLM service error 504: Deadline expired")
+        return "ok"
+
+    async def on_status(text):
+        statuses.append(text)
+
+    monkeypatch.setattr(client, "_generate_with", fake)
+    assert await client.generate("p", BaseModel, on_status=on_status) == "ok"
+    assert statuses == ["Gemini took too long to answer. Trying the backup model"]
+
+
+def test_llm_failures_are_described_in_plain_language():
+    assert describe_llm_failure(RetryableError(ErrorCode.LLM_FAILED, "LLM service error 503: high demand")) == (
+        "Gemini is overloaded right now"
+    )
+    assert describe_llm_failure(RetryableError(ErrorCode.LLM_FAILED, "LLM request failed: ReadTimeout")) == (
+        "Gemini took too long to answer"
+    )
 
 
 def test_gemini_requires_api_key(limits):

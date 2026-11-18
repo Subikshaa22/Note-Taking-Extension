@@ -9,6 +9,7 @@ import asyncio
 import logging
 import math
 import re
+from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar
 
 from google import genai
@@ -27,6 +28,23 @@ T = TypeVar("T", bound=BaseModel)
 
 _QUOTA_ID = re.compile(r"quotaId['\"]?\s*:\s*['\"]([^'\"]+)")
 _RETRY_DELAY = re.compile(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s")
+
+# Receives a short, human-readable line for the popup (e.g. "Gemini is overloaded right now...").
+StatusCallback = Callable[[str], Awaitable[None]]
+
+
+def describe_llm_failure(exc: Exception) -> str:
+    """Plain-language reason for a transient LLM failure, for the user (never a raw payload)."""
+    text = str(exc)
+    if "504" in text or "Timeout" in text or "Deadline" in text:
+        return "Gemini took too long to answer"
+    if "503" in text or "high demand" in text or "overloaded" in text.lower():
+        return "Gemini is overloaded right now"
+    if getattr(exc, "code", None) == ErrorCode.LLM_BAD_OUTPUT:
+        return "Gemini returned an unusable answer"
+    if "500" in text or "502" in text:
+        return "Gemini had a server error"
+    return "Gemini had a temporary problem"
 
 
 def estimate_tokens(text: str) -> int:
@@ -48,7 +66,9 @@ PromptPart = str | bytes
 
 
 class LLMClient(Protocol):
-    async def generate(self, prompt: str, schema: type[T], on_wait: WaitCallback | None = None) -> T: ...
+    async def generate(
+        self, prompt: str, schema: type[T], on_wait: WaitCallback | None = None, *, on_status: StatusCallback | None = None
+    ) -> T: ...
 
     async def generate_from_parts(
         self,
@@ -57,6 +77,8 @@ class LLMClient(Protocol):
         on_wait: WaitCallback | None = None,
         timeout_sec: float | None = None,
         image_resolution: str = "high",
+        *,
+        on_status: StatusCallback | None = None,
     ) -> T: ...
 
 
@@ -84,6 +106,8 @@ class GeminiClient:
         on_wait: WaitCallback | None = None,
         timeout_sec: float | None = None,
         image_resolution: str = "high",
+        *,
+        on_status: StatusCallback | None = None,
     ) -> T:
         """Text interleaved with JPEG images (e.g. a label before every video frame).
 
@@ -102,23 +126,37 @@ class GeminiClient:
         extra = {"media_resolution": _MEDIA_RESOLUTION[image_resolution]}
         if timeout_sec:
             extra["http_options"] = types.HttpOptions(timeout=int(timeout_sec * 1000), retry_options=types.HttpRetryOptions(attempts=1))
-        return await self._generate(contents, tokens, schema, on_wait, extra, blocking=True)
+        return await self._generate(contents, tokens, schema, on_wait, extra, blocking=True, on_status=on_status)
 
-    async def generate(self, prompt: str, schema: type[T], on_wait: WaitCallback | None = None) -> T:
-        return await self._generate(prompt, estimate_tokens(prompt), schema, on_wait, {})
+    async def generate(
+        self, prompt: str, schema: type[T], on_wait: WaitCallback | None = None, *, on_status: StatusCallback | None = None
+    ) -> T:
+        return await self._generate(prompt, estimate_tokens(prompt), schema, on_wait, {}, on_status=on_status)
 
     async def _generate(
-        self, contents, tokens: int, schema: type[T], on_wait: WaitCallback | None, extra: dict, blocking: bool = False
+        self,
+        contents,
+        tokens: int,
+        schema: type[T],
+        on_wait: WaitCallback | None,
+        extra: dict,
+        blocking: bool = False,
+        on_status: StatusCallback | None = None,
     ) -> T:
-        """Try the primary model, then the fallback model on a transient failure."""
+        """Try the primary model, then the fallback model on a transient failure.
+
+        Switching models is reported through `on_status` so the user sees why it is slow.
+        """
         last_error: RetryableError | None = None
         quota_error: FatalError | None = None
-        for model in self._models:
+        for index, model in enumerate(self._models):
             try:
                 return await self._generate_with(model, contents, tokens, schema, on_wait, extra, blocking)
             except RetryableError as exc:
                 log.warning("model %s failed transiently: %s", model, exc)
                 last_error = exc
+                if on_status and index + 1 < len(self._models) and not isinstance(exc, RateLimitedError):
+                    await on_status(f"{describe_llm_failure(exc)}. Trying the backup model")
             except FatalError as exc:
                 if exc.code == ErrorCode.LLM_QUOTA_EXHAUSTED:
                     # Another model has its own daily quota, so it is still worth trying.

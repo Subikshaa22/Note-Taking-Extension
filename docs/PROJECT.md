@@ -15,7 +15,7 @@ Spec references such as **§6** point to sections of the assignment brief ("Proj
 | **What it does** | A Chrome extension sends a YouTube video to a backend that writes study notes (summary, takeaways, sectioned bullets), captures real frames at the moments the LLM flags as visually important, captions each frame, and publishes everything to a Notion page. |
 | **Components** (§1.1) | Chrome MV3 extension · FastAPI gateway · RabbitMQ broker · worker pool (2 by default, scalable) · Redis state store. Each runs as its own process/container under one `docker-compose.yml`. |
 | **Stack** | Python 3.12, FastAPI, aio-pika, redis-py (async), yt-dlp + Deno, youtube-transcript-api, ffmpeg, Pillow, google-genai (Gemini), httpx (Notion), plain-JS Chrome extension. |
-| **Tests** | 131 automated tests (`pytest`), plus the live checks listed in §8. |
+| **Tests** | 145 automated tests (`pytest`), plus the live checks listed in §8. |
 
 ### 1.1 How a job flows
 
@@ -65,7 +65,7 @@ redelivers its unacknowledged message to another worker, which resumes from the 
   `LEASE_TTL_SEC` if its holder dies.
 - **Global rate limiter** (`infra/rate_limiter.py`): atomic multi-quota sliding windows in Redis (LLM RPM + TPM
   per model, Notion RPS, YouTube RPM), plus a cooldown when a provider still returns 429.
-- **Pipeline stages** (`pipeline/`): transcribe (metadata first, then Constraint A, then transcript), summarize
+- **Pipeline stages** (`pipeline/`): transcribe (metadata first, then Constraint A, then a Notion access check that resolves the destination so a bad token or unshared page fails in seconds, then transcript), summarize
   (one call, or chunked map/reduce), extract_frames (concurrent ffmpeg captures with per-frame outcomes) and
   publish (destination resolution, frame uploads, page creation with crash-safe checkpoints).
 - **Worker** (`worker/`): stale-message detection, attempt counting, retry with exponential backoff that honours
@@ -165,13 +165,13 @@ redelivers its unacknowledged message to another worker, which resumes from the 
 | NFR-4 | **Rate-limit compliance** | Global, atomic limits for the LLM, Notion and YouTube; cooldown on 429 | ✅ verified with a burst |
 | NFR-5 | **Scalability** | Stateless workers; `--scale worker=N`; per-worker concurrency | ✅ |
 | NFR-6 | **Recovery time** | ≤ `LEASE_TTL_SEC` (10s) + stage re-run time after a worker is killed | ✅ (~21s measured with the earlier 20s TTL) |
-| NFR-7 | **Latency** | One LLM call for ≤ 20-min videos, concurrent frame capture via ffmpeg range seeks (≈1–4s per frame measured). Visual frame selection adds one pass over a 360p stream (≈110s for a 19-min video) and one vision call (≈1 min); `FRAME_SELECTION=transcript` skips both | ⚠️ end-to-end time with a real LLM key not measured here |
+| NFR-7 | **Latency** | One LLM call for ≤ 20-min videos, concurrent frame capture via ffmpeg range seeks (≈1–4s per frame measured). Visual frame selection adds one pass over a 360p stream, run in parallel with the summarize call, and one vision call capped at `FRAME_SELECTION_TIMEOUT_SEC` (240s); if the model times out or is overloaded the job falls back to transcript-chosen frames instead of retrying. `FRAME_SELECTION=transcript` skips both | ⚠️ measured on a day Gemini returned 503/504s: a 4-min video took 11 min 18 s before these limits (≈10 min in the vision call and its retries); after them, an 18.6-min video took **6 min 57 s** (≈4 min lost to two Gemini 504s while writing notes; frames 55 s with the scan already done, publish 11 s), i.e. ≈3 min without the 504s |
 | NFR-8 | **Security** | Notion token encrypted in the queue and never stored or logged; OAuth client secret only on the server; a `state` check on OAuth; least-privilege extension permissions; untrusted titles rendered with `textContent` | ✅ (the gateway itself has no auth, see §9) |
 | NFR-9 | **Observability** | Structured logs per component, `/healthz` with queue depths, per-job history (`?include=history`), `worker_id`/`attempt` in the status, RabbitMQ UI | ✅ (no metrics endpoint yet) |
 | NFR-10 | **Usability** | No raw JSON; human messages and hints; retry countdown; light and dark themes; keyboard focus styles | ✅ |
 | NFR-11 | **Configurability** | Every limit, budget and model is an env var | ✅ |
 | NFR-12 | **Maintainability** | Layered package (domain → infra → services → pipeline → worker/gateway); LLM behind a protocol; pure functions for prompts and page layout | ✅ |
-| NFR-13 | **Testability** | 131 tests with fakes (fakeredis + Lua, a mock Notion API, a fake LLM); no network needed | ✅ |
+| NFR-13 | **Testability** | 145 tests with fakes (fakeredis + Lua, a mock Notion API, a fake LLM); no network needed | ✅ |
 | NFR-14 | **Portability** | Everything in Docker; the extension needs no build | ✅ |
 
 ---
@@ -198,6 +198,7 @@ last column says roughly what that would involve.
 | Frame selection | **Visual** (default): sample the video every 5s at 360p, label each sample with its timestamp, and have the vision model list the board/slide states and pick, per state, the sample where the content is most complete and least blocked by the presenter; then capture those seconds at 720p. Transcript-only mode remains as a setting and as the fallback | The transcript says when something is discussed, not whether it is legible: on whiteboard lectures the presenter often stands in front of the board, and boards are erased and rewritten. Labels inside the samples stop the model from confusing which of ~230 images is which; medium media resolution halves the token cost (≈530 vs ≈1100 per image) | The Gemini YouTube-URL video input (simpler, but bills the whole video and its timestamps are coarser); local person-detection to score occlusion (no model call, but needs a CV model in the worker image) |
 | Transcript source | `youtube-transcript-api` (manual captions, then auto, then any language) | No API key, timestamps included | YouTube Data API captions (OAuth, owner-only); ASR (Whisper/Gemini audio) for videos without captions |
 | Frame capture | ffmpeg seeking directly in the remote stream (range requests), JPEG ≤ 720p, blank-frame check | Downloads only a few hundred KB per frame | Download the whole video once (more robust to stream quirks, slower), or yt-dlp `download_ranges` per frame |
+| Repeat submissions | **Per-video cache** in Redis (`infra/video_cache.py`): metadata, transcript, notes, the final frame choice (only when the vision model made it) and frame images, keyed by video id plus every setting that shapes them; TTL `VIDEO_CACHE_TTL_SEC` | A second run of a video skips YouTube, the LLM and capture; it still checks Notion and creates its own page | No cache (every job is independent); cache only the transcript; reuse the previous Notion page instead of creating a new one |
 | Frame storage between stages | Base64 in Redis with the job TTL | Workers share no filesystem; frames are small (~30–50 KB) | Object storage (MinIO/S3) for larger frames or many jobs |
 | Token transport | Fernet-encrypted inside each stage message | The gateway "never stores" the token (§5); a broker dump reveals nothing | Encrypted in Redis keyed by job; short-lived tokens from a token service |
 | Default destination | Request → `NOTION_DEFAULT_PARENT_ID` → most recently edited top-level shared page → the shared root above the most recently edited page (walking up parents the integration can open) | Works with zero configuration after OAuth; the walk-up stops notes from nesting inside earlier notes when the shared page is not top-level | A template page duplicated during OAuth (`duplicated_template_id`); always create a "Video Notes" page |
@@ -257,7 +258,7 @@ last column says roughly what that would involve.
 
 | Check | How | Result |
 |---|---|---|
-| Unit and integration tests | `pytest` | 131 passed |
+| Unit and integration tests | `pytest` | 145 passed |
 | Stack starts and is healthy | `docker compose up`, `GET /healthz` | ✅ all checks ok |
 | Real metadata + transcript | Job for `dQw4w9WgXcQ` in Docker | ✅ title and duration fetched; transcribe ran on worker A, summarize on worker B |
 | Real frame capture | `resolve_stream` + ffmpeg in the worker container | ✅ 1280×720 frames in 1–4s each (after the `available_at` fix) |

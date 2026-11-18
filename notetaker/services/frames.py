@@ -111,6 +111,11 @@ class FrameGrabber:
                 proc.kill()
                 await proc.wait()
                 raise FrameCaptureError(f"video scan timed out after {timeout_sec:.0f}s") from exc
+            except asyncio.CancelledError:
+                # A scan started ahead of time (during summarize) is cancelled if that stage fails.
+                proc.kill()
+                await proc.wait()
+                raise
             text = stderr.decode(errors="replace")
             if proc.returncode != 0:
                 raise FrameCaptureError(ffmpeg_error_text(stderr) or f"exit code {proc.returncode}")

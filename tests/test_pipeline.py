@@ -155,6 +155,27 @@ async def test_transcribe_rejects_long_videos_before_fetching_transcript(store, 
     assert services.transcripts.calls == 0
 
 
+async def test_transcribe_rejects_bad_notion_destination_before_any_llm_work(store, redis):
+    llm = FakeLLM([])  # any LLM call would fail: the queue is empty
+    services = make_services(redis, make_settings(), llm=llm)
+    job = _job().model_copy(update={"notion_parent_id": "missing-page"})
+    await store.create(job)
+    with pytest.raises(FatalError) as exc:
+        await transcribe.run(make_context(store, services, job))
+    assert exc.value.code == ErrorCode.NOTION_PARENT_NOT_FOUND
+    assert llm.prompts == []
+
+
+async def test_publish_reuses_destination_checked_in_transcribe(store, redis):
+    notion = FakeNotion()
+    services = await _prepare_notes(store, redis, notion=notion)
+    searches_before = notion.calls.count(("POST", "/search"))
+    await extract_frames.run(make_context(store, services, _job()))
+    await publish.run(make_context(store, services, _job()))
+    assert searches_before == 1  # resolved once, during transcribe
+    assert notion.calls.count(("POST", "/search")) == 1
+
+
 async def test_transcribe_is_idempotent(store, redis):
     services = make_services(redis, make_settings())
     await store.create(_job())
@@ -329,6 +350,7 @@ async def test_default_destination_is_shared_root_not_last_notes_page(store, red
 async def test_publish_unknown_parent_is_fatal(store, redis):
     services = await _prepare_notes(store, redis)
     job = _job().model_copy(update={"notion_parent_id": "missing-page"})
+    await store.save_artifact("job-1", "publish", {})  # as if the early check had not run
     with pytest.raises(FatalError) as exc:
         await publish.run(make_context(store, services, job))
     assert exc.value.code == ErrorCode.NOTION_PARENT_NOT_FOUND

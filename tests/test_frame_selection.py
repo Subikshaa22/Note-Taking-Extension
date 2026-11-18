@@ -3,7 +3,7 @@ import io
 
 from PIL import Image
 
-from notetaker.domain.errors import ErrorCode, FatalError, RetryableError
+from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
 from notetaker.domain.models import FrameSuggestion, Job, Notes, VideoMeta
 from notetaker.pipeline import extract_frames, summarize, transcribe
 from notetaker.pipeline.frame_selection import (
@@ -69,7 +69,7 @@ async def test_visual_plan_is_not_repeated_on_redelivery(store, redis):
 async def test_selection_retry_reuses_the_scan(store, redis):
     frames = FakeFrames()
     busy = RetryableError(ErrorCode.LLM_FAILED, "503 high demand")
-    services = await _prepare(store, redis, [busy, _VISUAL_PLAN], frames=frames)
+    services = await _prepare(store, redis, [busy, _VISUAL_PLAN], frames=frames, visual_selection_attempts=2)
     try:
         await extract_frames.run(make_context(store, services, _job(), attempt=1))
     except RetryableError:
@@ -87,6 +87,66 @@ async def test_selection_falls_back_to_transcript_frames_on_last_attempt(store, 
     result = await extract_frames.run(make_context(store, services, _job(), attempt=3))
     assert services.frames.calls == [30, 150]
     assert [w.code for w in result.fields["warnings"]] == ["VISUAL_SELECTION_UNAVAILABLE"]
+
+
+async def test_overloaded_selection_falls_back_on_first_failure_by_default(store, redis):
+    busy = RetryableError(ErrorCode.LLM_FAILED, "503 high demand")
+    services = await _prepare(store, redis, [busy])
+    result = await extract_frames.run(make_context(store, services, _job(), attempt=1))
+    assert services.frames.calls == [30, 150]  # transcript frames, no retry wait
+    assert [w.code for w in result.fields["warnings"]] == ["VISUAL_SELECTION_UNAVAILABLE"]
+
+
+async def test_rate_limited_selection_is_still_requeued(store, redis):
+    throttled = RateLimitedError("llm:gemini", "429", 10)
+    services = await _prepare(store, redis, [throttled])
+    try:
+        await extract_frames.run(make_context(store, services, _job(), attempt=1))
+    except RateLimitedError:
+        pass
+    else:
+        raise AssertionError("a 429 must be re-queued with backoff, not degraded")
+
+
+async def test_selection_uses_its_own_timeout(store, redis):
+    services = await _prepare(store, redis, [_VISUAL_PLAN], frame_selection_timeout_sec=42)
+    seen = {}
+    original = services.llm.generate_from_parts
+
+    async def spy(parts, schema, on_wait=None, timeout_sec=None, image_resolution="high", **kwargs):
+        seen["timeout"] = timeout_sec
+        return await original(parts, schema, on_wait, timeout_sec, image_resolution, **kwargs)
+
+    services.llm.generate_from_parts = spy
+    await extract_frames.run(make_context(store, services, _job()))
+    assert seen["timeout"] == 42
+
+
+async def test_summarize_scans_the_video_ahead_of_the_frames_stage(store, redis):
+    frames = FakeFrames()
+    await _prepare(store, redis, [_VISUAL_PLAN], frames=frames)
+    assert frames.scans == 1  # scanned while the notes were written
+    assert await store.load_scan("job-1")  # samples cached for the frames stage
+
+
+async def test_failed_early_scan_does_not_fail_summarize(store, redis):
+    from notetaker.services.frames import FrameCaptureError
+
+    frames = FakeFrames(scan_error=FrameCaptureError("403"))
+    await _prepare(store, redis, [_VISUAL_PLAN], frames=frames)  # would raise if summarize failed
+    assert await store.load_artifact("job-1", "notes", Notes) is not None
+    assert await store.load_scan("job-1") == {}
+
+
+async def test_transcript_mode_does_not_scan(store, redis):
+    frames = FakeFrames()
+    llm = FakeLLM([sample_notes().model_dump()])
+    services = make_services(redis, make_settings(frame_selection="transcript"), llm=llm, frames=frames)
+    await store.create(_job())
+    ctx = make_context(store, services, _job())
+    await transcribe.run(ctx)
+    await summarize.run(ctx)
+    assert frames.scans == 0
 
 
 async def test_rejected_selection_request_falls_back_immediately(store, redis):

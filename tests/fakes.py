@@ -38,14 +38,16 @@ class FakeLLM:
         self.responses = list(responses)
         self.prompts: list[str] = []
 
-    async def generate(self, prompt, schema, on_wait=None):
+    async def generate(self, prompt, schema, on_wait=None, *, on_status=None):
         self.prompts.append(prompt)
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return schema.model_validate(response)
 
-    async def generate_from_parts(self, parts, schema, on_wait=None, timeout_sec=None, image_resolution="high"):
+    async def generate_from_parts(
+        self, parts, schema, on_wait=None, timeout_sec=None, image_resolution="high", *, on_status=None
+    ):
         self.image_resolution = image_resolution
         self.prompts.append(parts)
         response = self.responses.pop(0)

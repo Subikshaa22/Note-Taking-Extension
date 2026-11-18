@@ -4,8 +4,10 @@ With FRAME_SELECTION=visual the timestamps are first re-chosen by looking at the
 (see `frame_selection`): the whole video is sampled at low resolution and a vision model
 picks, for each state of the board/slides, the moment where it is most complete and least
 blocked by the presenter. The plan is saved once, so a redelivered message skips straight
-to capturing. If the visual step cannot finish within the attempt budget, the transcript-
-based frames are used instead and the job carries a warning.
+to capturing. The scan itself is usually started early, while the summarize stage is
+writing the notes (`prefetch_scan`). If the vision call fails for a reason other than a
+rate limit (timeout, overload) more than VISUAL_SELECTION_ATTEMPTS times, or the attempt
+budget runs out, the transcript-based frames are used instead and the job carries a warning.
 
 A frame that cannot be captured is recorded as failed and simply left out of the page;
 nothing is ever substituted for it (Constraint B). Only a throttled or failing stream
@@ -21,6 +23,7 @@ from notetaker.domain.status import STATUS_PROGRESS, JobStatus
 from notetaker.pipeline.context import StageContext, StageResult
 from notetaker.pipeline.frame_selection import scan_interval, select_frames
 from notetaker.services.frames import FrameCaptureError, ScanFrame
+from notetaker.services.llm import describe_llm_failure
 from notetaker.services.youtube import StreamInfo
 
 log = logging.getLogger(__name__)
@@ -29,16 +32,15 @@ _CAPTURE_TRIES = 2
 _STREAM_TRIES = 2
 # Scan samples are only needed until the frames are chosen.
 _SCAN_CACHE_TTL_SEC = 3600
-# One request carries a couple of hundred images; give it longer than a text-only call.
-_MIN_SELECTION_TIMEOUT_SEC = 300
 
 
-async def _scan(ctx: StageContext, interval: int) -> list[ScanFrame]:
+async def _scan(ctx: StageContext, interval: int, *, quiet: bool = False) -> list[ScanFrame]:
     cached = await ctx.store.load_scan(ctx.job_id)
     if cached:
         return [ScanFrame(ts, img) for ts, img in sorted(cached.items())]
     settings = ctx.settings
-    await ctx.report("Scanning the video for board and slide content")
+    if not quiet:
+        await ctx.report("Scanning the video for board and slide content")
     stream = await ctx.services.youtube.resolve_stream(ctx.job.video_id, max_height=settings.frame_scan_height)
     try:
         scan = await ctx.services.frames.scan(stream, interval, settings.frame_scan_height, settings.frame_scan_timeout_sec)
@@ -46,6 +48,37 @@ async def _scan(ctx: StageContext, interval: int) -> list[ScanFrame]:
         raise RetryableError(ErrorCode.YOUTUBE_FAILED, f"Could not scan the video: {exc}") from exc
     await ctx.store.save_scan(ctx.job_id, {f.timestamp_sec: f.image for f in scan}, _SCAN_CACHE_TTL_SEC)
     return scan
+
+
+def _scan_interval_for(ctx: StageContext, meta: VideoMeta) -> int:
+    s = ctx.settings
+    return scan_interval(meta.duration_sec, s.frame_scan_interval_sec, s.frame_scan_max_images)
+
+
+async def prefetch_scan(ctx: StageContext, meta: VideoMeta) -> None:
+    """Sample the video ahead of time (run alongside the summarize stage's LLM call).
+
+    The samples go into the same cache `plan_frames` reads, so the frames stage starts straight
+    at the vision call. Best effort: any failure is ignored and the frames stage scans again.
+    """
+    if ctx.settings.frame_selection != "visual" or await ctx.store.load_artifact_dict(ctx.job_id, "frame_plan"):
+        return
+    try:
+        await _scan(ctx, _scan_interval_for(ctx, meta), quiet=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the frames stage retries the scan on its own
+        log.info("job %s: early video scan failed, the frames stage will retry it: %s", ctx.job_id, exc)
+
+
+def _should_retry_selection(ctx: StageContext, exc: RetryableError | FatalError) -> bool:
+    """Retry the stage (instead of falling back to transcript frames) only for throttling, scan
+    problems, or while the vision call still has attempts left."""
+    if not exc.retryable or ctx.is_last_attempt:
+        return False
+    if exc.code == ErrorCode.LLM_FAILED:  # timeout or overload, not a rate limit
+        return ctx.attempt < ctx.settings.visual_selection_attempts
+    return True
 
 
 async def plan_frames(ctx: StageContext, notes: Notes) -> Notes:
@@ -57,7 +90,7 @@ async def plan_frames(ctx: StageContext, notes: Notes) -> Notes:
     if meta is None:
         raise RuntimeError("extract_frames stage ran before metadata was stored")
 
-    interval = scan_interval(meta.duration_sec, settings.frame_scan_interval_sec, settings.frame_scan_max_images)
+    interval = _scan_interval_for(ctx, meta)
     try:
         scan = await _scan(ctx, interval)
         await ctx.report(f"Choosing the clearest moments from {len(scan)} sampled frames")
@@ -69,11 +102,12 @@ async def plan_frames(ctx: StageContext, notes: Notes) -> Notes:
             interval_sec=interval,
             max_frames=settings.max_frames,
             language=settings.notes_language,
-            timeout_sec=max(settings.llm_timeout_sec, _MIN_SELECTION_TIMEOUT_SEC),
+            timeout_sec=settings.frame_selection_timeout_sec,
             on_wait=ctx.rate_limit_reporter("LLM"),
+            on_status=ctx.report,
         )
     except (RetryableError, FatalError) as exc:
-        if exc.retryable and not ctx.is_last_attempt:
+        if _should_retry_selection(ctx, exc):
             raise
         log.warning("job %s: visual frame selection unavailable, using transcript frames: %s", job_id, exc)
         await store.save_artifact(job_id, "frame_plan", {"source": "transcript", "reason": exc.message[:200]})
@@ -88,14 +122,20 @@ async def plan_frames(ctx: StageContext, notes: Notes) -> Notes:
     return notes
 
 
+def _fallback_reason(reason: str) -> str:
+    if reason.startswith(("LLM", "Gemini")) or "model" in reason.lower():
+        return describe_llm_failure(reason)
+    return "the video could not be scanned"
+
+
 def plan_warnings(plan: dict | None) -> list[JobWarning]:
     if not plan or plan.get("source") != "transcript":
         return []
     return [
         JobWarning(
             code=WarningCode.VISUAL_SELECTION_UNAVAILABLE,
-            message="Frames could not be chosen by looking at the video, so they were picked from the transcript "
-            f"and may show the presenter in front of the board ({plan.get('reason', 'unknown reason')}).",
+            message="Frames were picked from the transcript instead of by looking at the video, because "
+            f"{_fallback_reason(plan.get('reason', ''))}. Some may show the presenter in front of the board.",
         )
     ]
 
@@ -127,9 +167,33 @@ async def _capture(ctx: StageContext, stream: StreamInfo, timestamp_sec: int) ->
             await asyncio.sleep(1)
             continue
         await ctx.store.save_frame(ctx.job_id, timestamp_sec, image)
+        await ctx.cache.put_frame(ctx.job.video_id, timestamp_sec, image)
         return None
     log.warning("frame %ss of job %s failed: %s", timestamp_sec, ctx.job_id, last_error)
     return str(last_error)[:200]
+
+
+async def _cache_final_notes(ctx: StageContext, notes: Notes) -> None:
+    """Remember the final frame choice for this video, unless it is a degraded fallback."""
+    plan = await ctx.store.load_artifact_dict(ctx.job_id, "frame_plan") or {}
+    good = plan.get("source") == "visual" or (ctx.settings.frame_selection == "transcript" and not plan)
+    if good:
+        await ctx.cache.put(ctx.job.video_id, ctx.cache.final_notes_key(), notes.model_dump(mode="json"))
+
+
+async def _reuse_cached_frames(ctx: StageContext, notes: Notes) -> None:
+    """Frames captured for this video by an earlier job are reused instead of captured again."""
+    outcomes = await ctx.store.frame_outcomes(ctx.job_id)
+    reused = 0
+    for frame in notes.frames:
+        if frame.timestamp_sec in outcomes:
+            continue
+        image = await ctx.cache.get_frame(ctx.job.video_id, frame.timestamp_sec)
+        if image:
+            await ctx.store.save_frame(ctx.job_id, frame.timestamp_sec, image)
+            reused += 1
+    if reused:
+        await ctx.report(f"Reusing {reused} saved frames from an earlier run")
 
 
 async def run(ctx: StageContext) -> StageResult:
@@ -138,6 +202,8 @@ async def run(ctx: StageContext) -> StageResult:
     if notes is None:
         raise RuntimeError("extract_frames stage ran before notes were stored")
     notes = await plan_frames(ctx, notes)
+    await _cache_final_notes(ctx, notes)
+    await _reuse_cached_frames(ctx, notes)
 
     outcomes = await store.frame_outcomes(job_id)
     pending = [f.timestamp_sec for f in notes.frames if f.timestamp_sec not in outcomes]
