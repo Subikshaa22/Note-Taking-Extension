@@ -1,41 +1,50 @@
+/* Pastel orange / yellow theme.
+   --accent is the soft fill (buttons, progress, step dots) and carries dark text;
+   --accent-strong is the deeper orange used wherever the accent is text or an outline. */
 :root {
-  --bg: #f7f7f8;
-  --surface: #ffffff;
-  --border: #e4e4e7;
-  --text: #18181b;
-  --muted: #6b6b76;
-  --accent: #4f46e5;
-  --accent-text: #ffffff;
-  --accent-soft: #eef2ff;
-  --success: #15803d;
-  --warning-bg: #fffbeb;
-  --warning-border: #f5d27a;
-  --warning-text: #78350f;
-  --error-bg: #fef2f2;
-  --error-border: #f3b4b4;
-  --error-text: #7f1d1d;
-  --track: #ececf0;
+  --bg: #fff7e8;
+  --surface: #fffdf6;
+  --border: #f5dfbd;
+  --text: #3b2814;
+  --muted: #8a6a4a;
+  --accent: #ffb877;
+  --accent-hover: #ffa95e;
+  --accent-text: #3b2814;
+  --accent-strong: #b45309;
+  --accent-soft: #ffe7c7;
+  --accent-gradient: linear-gradient(90deg, #ffb877, #ffd76e);
+  --success: #3f7d2c;
+  --warning-bg: #fff6d3;
+  --warning-border: #f2d36f;
+  --warning-text: #7a5200;
+  --error-bg: #fff0eb;
+  --error-border: #f5bfad;
+  --error-text: #a03a22;
+  --track: #fbecd3;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17171a;
-    --surface: #212126;
-    --border: #34343b;
-    --text: #f2f2f4;
-    --muted: #a1a1aa;
-    --accent: #818cf8;
-    --accent-text: #111827;
-    --accent-soft: #2a2b45;
-    --success: #4ade80;
-    --warning-bg: #2d2412;
-    --warning-border: #6b5418;
-    --warning-text: #fcd98b;
-    --error-bg: #2e1616;
-    --error-border: #6e2626;
-    --error-text: #fca5a5;
-    --track: #33333a;
+    --bg: #1f1812;
+    --surface: #2a2119;
+    --border: #47382a;
+    --text: #fbefdf;
+    --muted: #c4a98b;
+    --accent: #ffbf85;
+    --accent-hover: #ffcd9e;
+    --accent-text: #2a1a0b;
+    --accent-strong: #ffc78c;
+    --accent-soft: #4a3320;
+    --accent-gradient: linear-gradient(90deg, #ffbf85, #ffe08a);
+    --success: #9bd48a;
+    --warning-bg: #33290f;
+    --warning-border: #6b5a1e;
+    --warning-text: #ffe08a;
+    --error-bg: #3a1d17;
+    --error-border: #7a3527;
+    --error-text: #ffab96;
+    --track: #3a2e23;
   }
 }
 
@@ -69,6 +78,11 @@ input {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 2px;
 }
 
 .brand {
@@ -129,6 +143,11 @@ input {
   color: var(--accent-text);
 }
 
+.button.primary:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
 .button:disabled {
   opacity: 0.6;
   cursor: progress;
@@ -136,7 +155,7 @@ input {
 
 .button:focus-visible,
 .link-button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
 }
 
@@ -144,7 +163,7 @@ input {
   border: 0;
   background: none;
   padding: 0;
-  color: var(--accent);
+  color: var(--accent-strong);
   font-weight: 600;
   cursor: pointer;
 }
@@ -176,9 +195,20 @@ input {
   text-transform: uppercase;
 }
 
-.inline-error {
-  margin: 8px 0 0;
+.notion-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notion-hint.error {
   color: var(--error-text);
+}
+
+.notion-guide {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 12px;
 }
 
 .current-video {
@@ -293,7 +323,7 @@ input {
 }
 
 .step.active {
-  color: var(--accent);
+  color: var(--accent-strong);
   font-weight: 650;
 }
 
@@ -335,7 +365,7 @@ input {
 .progress-fill {
   height: 100%;
   width: 0;
-  background: var(--accent);
+  background: var(--accent-gradient);
   transition: width 0.4s ease;
 }
 

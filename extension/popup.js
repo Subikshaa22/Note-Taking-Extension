@@ -12,7 +12,8 @@ import {
   timeAgo,
 } from "./lib/format.js";
 import { listJobs } from "./lib/jobs.js";
-import { getNotionAuth } from "./lib/storage.js";
+import { getOAuthConfig } from "./lib/api.js";
+import { getNotionAuth, getSettings } from "./lib/storage.js";
 
 const STAGE_STEP = { transcribe: 1, summarize: 2, extract_frames: 3, publish: 4 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -31,46 +32,77 @@ async function send(type, payload = {}) {
 
 // ---- Notion connection -----------------------------------------------------------------
 
+// Whether the server offers one-click Notion sign-in (it needs an OAuth app in .env).
+async function notionSignIn() {
+  try {
+    const { gatewayUrl } = await getSettings();
+    const config = await getOAuthConfig(gatewayUrl);
+    return { enabled: Boolean(config?.enabled) };
+  } catch (error) {
+    return { enabled: false, problem: error.message };
+  }
+}
+
+function openTokenSettings() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("options.html#token-form") });
+}
+
+function openSetupGuide() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("setup.html") });
+}
+
+let notionRenderId = 0;
+
+// Builds the whole card before swapping it in, so overlapping renders can't duplicate buttons.
+// A message stays on the card until the next render instead of disappearing on a timer.
 async function renderNotion(errorMessage) {
-  const card = $("#notion-card");
+  const renderId = ++notionRenderId;
   const auth = await getNotionAuth();
-  const status = el("div", { className: "notion-status" });
-  card.replaceChildren(status);
+  const status = el("div", { className: "notion-status" }, [
+    el("span", { className: "eyebrow", textContent: "Notion" }),
+  ]);
+  let action;
+  let hint = errorMessage ? { text: errorMessage, error: true } : null;
 
   if (auth?.accessToken) {
-    status.append(
-      el("span", { className: "eyebrow", textContent: "Notion" }),
-      el("strong", { textContent: `Connected to ${auth.workspaceName || "your workspace"}` }),
-    );
-    const disconnect = el("button", { className: "link-button", type: "button", textContent: "Disconnect" });
-    disconnect.addEventListener("click", async () => {
+    status.append(el("strong", { textContent: `Connected to ${auth.workspaceName || "your workspace"}` }));
+    action = el("button", { className: "link-button", type: "button", textContent: "Disconnect" });
+    action.addEventListener("click", async () => {
       await send("DISCONNECT_NOTION");
       renderNotion();
     });
-    card.append(disconnect);
   } else {
-    status.append(
-      el("span", { className: "eyebrow", textContent: "Notion" }),
-      el("strong", { textContent: "Not connected" }),
-    );
-    const connect = el("button", { className: "button primary", type: "button", textContent: "Connect Notion" });
-    connect.addEventListener("click", async () => {
-      connect.disabled = true;
-      connect.textContent = "Connecting…";
-      try {
-        await send("CONNECT_NOTION");
-        renderNotion();
-      } catch (error) {
-        renderNotion(error.message);
-      }
-    });
-    card.append(connect);
+    status.append(el("strong", { textContent: "Not connected" }));
+    const signIn = await notionSignIn();
+    if (signIn.enabled) {
+      action = el("button", { className: "button primary", type: "button", textContent: "Connect Notion" });
+      action.addEventListener("click", async () => {
+        action.disabled = true;
+        action.textContent = "Connecting…";
+        try {
+          await send("CONNECT_NOTION");
+          renderNotion();
+        } catch (error) {
+          renderNotion(error.message);
+        }
+      });
+    } else {
+      action = el("button", { className: "button primary", type: "button", textContent: "Add token" });
+      action.addEventListener("click", openTokenSettings);
+      hint ??= signIn.problem
+        ? { text: signIn.problem, error: true }
+        : { text: "One-click sign-in isn't set up on the server. Add a Notion integration token to start taking notes." };
+    }
   }
-  if (errorMessage) {
-    const note = el("p", { className: "inline-error", textContent: errorMessage });
-    card.after(note);
-    setTimeout(() => note.remove(), 8000);
+
+  if (renderId !== notionRenderId) return; // a newer render has taken over
+  if (hint) status.append(el("p", { className: hint.error ? "notion-hint error" : "notion-hint", textContent: hint.text }));
+  if (!auth?.accessToken) {
+    const guide = el("button", { className: "link-button notion-guide", type: "button", textContent: "Open the setup guide" });
+    guide.addEventListener("click", openSetupGuide);
+    status.append(guide);
   }
+  $("#notion-card").replaceChildren(status, action);
 }
 
 // ---- "Take notes" for the active tab -------------------------------------------------------
@@ -202,6 +234,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 $("#open-settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("#open-setup").addEventListener("click", openSetupGuide);
 $("#clear-finished").addEventListener("click", () => send("CLEAR_FINISHED"));
 
 async function poll() {

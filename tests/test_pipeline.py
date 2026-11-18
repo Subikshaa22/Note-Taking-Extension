@@ -307,6 +307,25 @@ async def test_publish_text_only_when_all_frames_failed(store, redis):
     assert len(result.fields["warnings"]) == 2
 
 
+async def test_default_destination_is_shared_root_not_last_notes_page(store, redis):
+    # The shared page is nested under a page the integration can't see, and the most recently
+    # edited page is an earlier notes page inside it. New notes must go beside it, not inside it.
+    notion = FakeNotion()
+    notion.parent_parent = {"type": "page_id", "page_id": "private-root"}
+    notion.pages["old-notes"] = {"title": "Earlier notes", "parent": {"type": "page_id", "page_id": "parent-page"}}
+    notion.children["old-notes"] = []
+    notion.search_results = [
+        {"id": "old-notes", "parent": {"type": "page_id", "page_id": "parent-page"}},
+        {"id": "parent-page", "parent": {"type": "page_id", "page_id": "private-root"}},
+    ]
+    services = await _prepare_notes(store, redis, notion=notion)
+    await extract_frames.run(make_context(store, services, _job()))
+    result = await publish.run(make_context(store, services, _job()))
+
+    created = notion.pages[result.fields["result"].notion_page_id]
+    assert created["parent"] == {"page_id": "parent-page"}
+
+
 async def test_publish_unknown_parent_is_fatal(store, redis):
     services = await _prepare_notes(store, redis)
     job = _job().model_copy(update={"notion_parent_id": "missing-page"})

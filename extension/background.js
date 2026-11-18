@@ -182,4 +182,10 @@ function ensureWatchdog() {
 }
 
 chrome.runtime.onInstalled.addListener(ensureWatchdog);
+// First install: open the setup guide so a new user knows what to do.
+chrome.runtime.onInstalled.addListener(({ reason }) => {
+  if (reason === chrome.runtime.OnInstalledReason.INSTALL) {
+    chrome.tabs.create({ url: chrome.runtime.getURL("setup.html") });
+  }
+});
 chrome.runtime.onStartup.addListener(ensureWatchdog);

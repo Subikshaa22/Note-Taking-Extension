@@ -30,7 +30,8 @@ Design, requirement traceability and the roadmap are in **[docs/PROJECT.md](docs
 and a Notion account.
 
 ```bash
-cp .env.example .env          # then set GEMINI_API_KEY (and the Notion OAuth values, see below)
+cp .env.example .env          # Windows Command Prompt: copy .env.example .env
+# then set GEMINI_API_KEY in .env (and the Notion OAuth values, see below)
 docker compose up --build -d  # RabbitMQ, Redis, gateway and 2 workers
 curl http://localhost:8000/healthz
 ```
@@ -38,11 +39,15 @@ curl http://localhost:8000/healthz
 A healthy stack answers `200` with `{"status": "ok", "checks": {"gateway": "ok", "redis": "ok", "broker": "ok"}, ...}`.
 
 **Load the extension** (no build step): open `chrome://extensions`, enable **Developer mode**, click
-**Load unpacked** and pick the `extension/` folder. Pin **Video Notes** to the toolbar.
+**Load unpacked** and pick the `extension/` folder. Pin **Video Notes** to the toolbar. A **setup guide** opens
+on first install (also reachable from the **?** icon in the popup and from Settings): it walks through these steps
+and shows a live checklist of what's already done (server reachable, Notion connected, destination chosen).
 
 **Connect Notion** from the extension popup (see [Notion setup](#notion-setup)), open any YouTube video
 of 20 minutes or less, and press **Take Notes** in the player toolbar. The popup shows progress and a
-**View in Notion** button when the page is ready.
+**View in Notion** button when the page is ready. If the server has no Notion OAuth app configured, the popup
+shows **Add token** instead of **Connect Notion**; it opens the Settings page where you paste an integration
+token (option B below).
 
 > Port 8000 already in use? Set `GATEWAY_PORT=8001` in `.env` and change the gateway address in the
 > extension's Settings page to `http://localhost:8001`.
@@ -86,14 +91,21 @@ Pick **one** of the two options.
 **B. Internal integration token.** No OAuth app is needed.
 1. Create an **internal** integration and copy its secret (`ntn_...`).
 2. Open the Notion page you want notes in, then use **⋯ → Connections** to add the integration.
-3. Paste the secret under **Notion access** on the extension's Settings page.
+3. Paste the secret under **Notion access** on the extension's Settings page (the popup's **Add token**
+   button opens it) and click **Use this token**.
 
 ### Default Notion destination
 
 If a job has no `notion_parent_id`, which is the case when the extension's Settings page leaves the
 destination empty, the page is created under:
 1. `NOTION_DEFAULT_PARENT_ID`, if it's set, otherwise
-2. the **most recently edited top-level page shared with the integration**.
+2. the **most recently edited top-level page shared with the integration**, otherwise
+3. if the shared page sits inside another page, the **shared page itself**: starting from the most recently
+   edited page, it walks up to the highest page the integration can open. This keeps new notes next to
+   earlier ones instead of nested inside the last notes page.
+
+Every job creates a new page; existing pages are never overwritten. To pin the destination, paste the page's
+link into **Notion destination** on the extension's Settings page.
 
 If nothing is shared with the integration, the job fails with `NOTION_NO_DESTINATION`. The parent can be a page
 or a database (for a database, the note becomes a new row).
@@ -156,7 +168,7 @@ Scale the pool with `docker compose up -d --scale worker=4`.
 ```bash
 py -3.12 -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt   # Windows
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt     # macOS/Linux
-.venv/Scripts/python -m pytest        # 108 tests; no Docker or network needed
+.venv/Scripts/python -m pytest        # 131 tests; no Docker or network needed
 ```
 
 To run the services outside Docker, start RabbitMQ and Redis, point `AMQP_URL` / `REDIS_URL` at them, and run

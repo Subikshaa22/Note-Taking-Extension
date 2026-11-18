@@ -32,13 +32,25 @@ body.options {
 }
 
 .options input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-strong);
   outline-offset: 1px;
 }
 
 .help {
   margin: 6px 0 10px;
   color: var(--muted);
+}
+
+.steps-list {
+  padding-left: 20px;
+}
+
+.steps-list li + li {
+  margin-top: 4px;
+}
+
+.help a {
+  color: var(--accent-strong);
 }
 
 .help.small {

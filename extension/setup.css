@@ -1,0 +1,206 @@
+/* Setup guide page. Builds on popup.css (tokens, cards, buttons) and options.css (page layout). */
+
+body.setup {
+  max-width: 720px;
+  font-size: 14px;
+}
+
+.setup .topbar {
+  margin-bottom: 14px;
+}
+
+.lead {
+  margin: 0 2px 14px;
+  color: var(--muted);
+}
+
+.setup .card {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  scroll-margin-top: 16px;
+}
+
+.setup h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.setup h3 {
+  margin: 14px 0 4px;
+  font-size: 14px;
+}
+
+.step-num {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 13px;
+}
+
+.status-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.checklist {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.checklist li {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.checklist li:first-child {
+  border-top: 0;
+}
+
+.checklist li > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.check-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.check-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+[data-state="ok"] .check-icon {
+  border-color: var(--success);
+  background: var(--success);
+  color: var(--surface);
+}
+
+[data-state="ok"] .check-icon::after {
+  content: "✓";
+}
+
+[data-state="bad"] .check-icon {
+  border-color: var(--error-text);
+  color: var(--error-text);
+}
+
+[data-state="bad"] .check-icon::after {
+  content: "!";
+}
+
+[data-state="optional"] .check-icon {
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+}
+
+[data-state="optional"] .check-icon::after {
+  content: "–";
+}
+
+[data-state="bad"] .check-detail {
+  color: var(--error-text);
+}
+
+.check-link,
+.setup a:not(.button) {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+[data-state="ok"] .check-link {
+  visibility: hidden;
+}
+
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.copy {
+  flex: none;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.copy:hover {
+  background: var(--accent-soft);
+}
+
+.small-note {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #ffc58f;
+  color: #3b2814;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.faq {
+  margin: 0;
+}
+
+.faq dt {
+  margin-top: 10px;
+  font-weight: 650;
+}
+
+.faq dt:first-child {
+  margin-top: 0;
+}
+
+.faq dd {
+  margin: 2px 0 0;
+  color: var(--muted);
+}

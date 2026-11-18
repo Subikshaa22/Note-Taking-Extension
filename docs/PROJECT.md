@@ -15,7 +15,7 @@ Spec references such as **§6** point to sections of the assignment brief ("Proj
 | **What it does** | A Chrome extension sends a YouTube video to a backend that writes study notes (summary, takeaways, sectioned bullets), captures real frames at the moments the LLM flags as visually important, captions each frame, and publishes everything to a Notion page. |
 | **Components** (§1.1) | Chrome MV3 extension · FastAPI gateway · RabbitMQ broker · worker pool (2 by default, scalable) · Redis state store. Each runs as its own process/container under one `docker-compose.yml`. |
 | **Stack** | Python 3.12, FastAPI, aio-pika, redis-py (async), yt-dlp + Deno, youtube-transcript-api, ffmpeg, Pillow, google-genai (Gemini), httpx (Notion), plain-JS Chrome extension. |
-| **Tests** | 108 automated tests (`pytest`), plus the live checks listed in §8. |
+| **Tests** | 131 automated tests (`pytest`), plus the live checks listed in §8. |
 
 ### 1.1 How a job flows
 
@@ -171,7 +171,7 @@ redelivers its unacknowledged message to another worker, which resumes from the 
 | NFR-10 | **Usability** | No raw JSON; human messages and hints; retry countdown; light and dark themes; keyboard focus styles | ✅ |
 | NFR-11 | **Configurability** | Every limit, budget and model is an env var | ✅ |
 | NFR-12 | **Maintainability** | Layered package (domain → infra → services → pipeline → worker/gateway); LLM behind a protocol; pure functions for prompts and page layout | ✅ |
-| NFR-13 | **Testability** | 108 tests with fakes (fakeredis + Lua, a mock Notion API, a fake LLM); no network needed | ✅ |
+| NFR-13 | **Testability** | 131 tests with fakes (fakeredis + Lua, a mock Notion API, a fake LLM); no network needed | ✅ |
 | NFR-14 | **Portability** | Everything in Docker; the extension needs no build | ✅ |
 
 ---
@@ -200,7 +200,7 @@ last column says roughly what that would involve.
 | Frame capture | ffmpeg seeking directly in the remote stream (range requests), JPEG ≤ 720p, blank-frame check | Downloads only a few hundred KB per frame | Download the whole video once (more robust to stream quirks, slower), or yt-dlp `download_ranges` per frame |
 | Frame storage between stages | Base64 in Redis with the job TTL | Workers share no filesystem; frames are small (~30–50 KB) | Object storage (MinIO/S3) for larger frames or many jobs |
 | Token transport | Fernet-encrypted inside each stage message | The gateway "never stores" the token (§5); a broker dump reveals nothing | Encrypted in Redis keyed by job; short-lived tokens from a token service |
-| Default destination | Request → `NOTION_DEFAULT_PARENT_ID` → most recently edited top-level shared page | Works with zero configuration after OAuth | A template page duplicated during OAuth (`duplicated_template_id`); always create a "Video Notes" page |
+| Default destination | Request → `NOTION_DEFAULT_PARENT_ID` → most recently edited top-level shared page → the shared root above the most recently edited page (walking up parents the integration can open) | Works with zero configuration after OAuth; the walk-up stops notes from nesting inside earlier notes when the shared page is not top-level | A template page duplicated during OAuth (`duplicated_template_id`); always create a "Video Notes" page |
 | Notion API version | `2022-06-28` (configurable) | Stable; supports page and database parents and the file upload API | The newer data-source API version (database parents need `data_source_id`) |
 | Extension tooling | Plain JS, MV3, no build | Loads unpacked directly (§8) | TypeScript + a bundler |
 | Status delivery | Polling: 3s in the background while jobs are active, 2s while the popup is open, plus a 30s alarm watchdog | Simple and robust to service-worker suspension | Server-sent events or WebSocket from the gateway |
@@ -257,7 +257,7 @@ last column says roughly what that would involve.
 
 | Check | How | Result |
 |---|---|---|
-| Unit and integration tests | `pytest` | 108 passed |
+| Unit and integration tests | `pytest` | 131 passed |
 | Stack starts and is healthy | `docker compose up`, `GET /healthz` | ✅ all checks ok |
 | Real metadata + transcript | Job for `dQw4w9WgXcQ` in Docker | ✅ title and duration fetched; transcribe ran on worker A, summarize on worker B |
 | Real frame capture | `resolve_stream` + ffmpeg in the worker container | ✅ 1280×720 frames in 1–4s each (after the `available_at` fix) |

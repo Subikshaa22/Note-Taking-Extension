@@ -11,14 +11,14 @@ BASE = 512
 def draw_master() -> Image.Image:
     img = Image.new("RGBA", (BASE, BASE), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((16, 16, BASE - 16, BASE - 16), radius=112, fill=(79, 70, 229))
+    d.rounded_rectangle((16, 16, BASE - 16, BASE - 16), radius=112, fill=(255, 176, 102))
     # Note page with a folded corner.
-    d.polygon([(150, 104), (300, 104), (370, 174), (370, 408), (150, 408)], fill=(255, 255, 255))
-    d.polygon([(300, 104), (300, 174), (370, 174)], fill=(199, 210, 254))
+    d.polygon([(150, 104), (300, 104), (370, 174), (370, 408), (150, 408)], fill=(255, 253, 246))
+    d.polygon([(300, 104), (300, 174), (370, 174)], fill=(255, 222, 140))
     for y in (220, 270, 320):
-        d.rounded_rectangle((188, y, 334, y + 22), radius=11, fill=(79, 70, 229))
+        d.rounded_rectangle((188, y, 334, y + 22), radius=11, fill=(230, 140, 70))
     # Play badge: notes taken from a video.
-    d.ellipse((300, 300, 452, 452), fill=(239, 68, 68), outline=(255, 255, 255), width=14)
+    d.ellipse((300, 300, 452, 452), fill=(245, 120, 90), outline=(255, 253, 246), width=14)
     d.polygon([(356, 340), (356, 412), (414, 376)], fill=(255, 255, 255))
     return img
 

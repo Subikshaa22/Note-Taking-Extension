@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Notes — Setup guide</title>
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="options.css" />
+    <link rel="stylesheet" href="setup.css" />
+  </head>
+  <body class="options setup">
+    <header class="topbar">
+      <div class="brand">
+        <img src="icons/icon32.png" alt="" width="22" height="22" />
+        <span>Video Notes — Setup guide</span>
+      </div>
+      <a class="button" href="options.html">Settings</a>
+    </header>
+
+    <p class="lead">
+      Video Notes turns a YouTube video into study notes with real frames from the video, and saves them as a
+      Notion page. It needs three things: the notes server running on your computer, access to Notion, and (optionally)
+      a Notion page to put the notes in.
+    </p>
+
+    <section class="card" aria-labelledby="status-title">
+      <div class="status-head">
+        <h2 id="status-title">Your setup</h2>
+        <button id="recheck" class="link-button" type="button">Check again</button>
+      </div>
+      <ul class="checklist">
+        <li id="check-server" data-state="pending">
+          <span class="check-icon" aria-hidden="true"></span>
+          <div><strong>Notes server</strong><span class="check-detail">Checking…</span></div>
+          <a class="check-link" href="#step-server">Step 1</a>
+        </li>
+        <li id="check-notion" data-state="pending">
+          <span class="check-icon" aria-hidden="true"></span>
+          <div><strong>Notion access</strong><span class="check-detail">Checking…</span></div>
+          <a class="check-link" href="#step-notion">Step 2</a>
+        </li>
+        <li id="check-destination" data-state="pending">
+          <span class="check-icon" aria-hidden="true"></span>
+          <div><strong>Notes destination</strong><span class="check-detail">Checking…</span></div>
+          <a class="check-link" href="#step-destination">Step 3</a>
+        </li>
+      </ul>
+    </section>
+
+    <section id="step-server" class="card step-card">
+      <h2><span class="step-num">1</span>Start the notes server</h2>
+      <p class="help">
+        You need <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener">Docker Desktop</a>
+        (open and running) and a free
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Gemini API key</a>.
+        Run these in a terminal inside the project folder.
+      </p>
+      <ol class="help steps-list">
+        <li>
+          Create your settings file:
+          <div class="cmd"><code>copy .env.example .env</code><button class="copy" type="button">Copy</button></div>
+          <span class="small-note">On macOS or Linux use <code>cp .env.example .env</code>.</span>
+        </li>
+        <li>Open <code>.env</code> in a text editor and set <code>GEMINI_API_KEY=</code> to your key.</li>
+        <li>
+          Start everything (the first run takes a few minutes):
+          <div class="cmd"><code>docker compose up --build -d</code><button class="copy" type="button">Copy</button></div>
+        </li>
+        <li>Click <strong>Check again</strong> at the top. <em>Notes server</em> should turn green.</li>
+      </ol>
+      <p class="help small-note">
+        To stop the server later, run <code>docker compose down</code>. If port 8000 is taken, set
+        <code>GATEWAY_PORT=8001</code> in <code>.env</code> and change the gateway address in
+        <a href="options.html">Settings</a> to <code>http://localhost:8001</code>.
+      </p>
+    </section>
+
+    <section id="step-notion" class="card step-card">
+      <h2><span class="step-num">2</span>Give Video Notes access to Notion</h2>
+      <p class="help">Pick <strong>one</strong> option. Option A is quickest.</p>
+
+      <h3>Option A: integration token (about 2 minutes)</h3>
+      <ol class="help steps-list">
+        <li>
+          Go to <a href="https://www.notion.so/profile/integrations" target="_blank" rel="noopener">notion.so/profile/integrations</a>,
+          click <strong>New integration</strong>, choose <strong>Internal</strong>, give it a name and save.
+        </li>
+        <li>Copy its <strong>Internal Integration Secret</strong> (it starts with <code>ntn_</code>).</li>
+        <li>
+          In Notion, open the page your notes should go under, click <strong>⋯ → Connections</strong> and add your
+          integration. This lets it create pages there.
+        </li>
+        <li>
+          Open <a href="options.html#token-form">Settings → Notion access</a>, paste the secret and click
+          <strong>Use this token</strong>.
+        </li>
+      </ol>
+      <p class="help small-note">Keep the secret private. It works like a password for the pages you connected.</p>
+
+      <h3>Option B: one-click “Connect Notion” sign-in</h3>
+      <p id="oauth-state" class="help"></p>
+      <ol class="help steps-list">
+        <li>
+          At <a href="https://www.notion.so/profile/integrations" target="_blank" rel="noopener">notion.so/profile/integrations</a>,
+          create a <strong>Public</strong> integration with the <em>Read content</em>, <em>Update content</em> and
+          <em>Insert content</em> capabilities.
+        </li>
+        <li>
+          Add this redirect URI exactly:
+          <div class="cmd"><code id="redirect-uri"></code><button class="copy" type="button">Copy</button></div>
+        </li>
+        <li>
+          Put the client ID and secret into <code>.env</code> as <code>NOTION_CLIENT_ID</code> and
+          <code>NOTION_CLIENT_SECRET</code>, then restart the server:
+          <div class="cmd"><code>docker compose up -d</code><button class="copy" type="button">Copy</button></div>
+        </li>
+        <li>Open the Video Notes popup, click <strong>Connect Notion</strong> and choose the pages to share.</li>
+      </ol>
+    </section>
+
+    <section id="step-destination" class="card step-card">
+      <h2><span class="step-num">3</span>Choose where notes go (recommended)</h2>
+      <ol class="help steps-list">
+        <li>In Notion, open the page you connected and click <strong>Share → Copy link</strong>.</li>
+        <li>
+          Paste it into <a href="options.html">Settings → Notion destination</a> and click <strong>Save settings</strong>.
+        </li>
+      </ol>
+      <p class="help">
+        Every video becomes a <strong>new page</strong> inside that page. Nothing is ever overwritten. If you leave the
+        destination empty, the server uses <code>NOTION_DEFAULT_PARENT_ID</code> from <code>.env</code> if set, otherwise
+        the page you shared with the integration (the most recently edited one if you shared several).
+      </p>
+    </section>
+
+    <section id="step-use" class="card step-card">
+      <h2><span class="step-num">4</span>Take notes</h2>
+      <ol class="help steps-list">
+        <li>Open a YouTube video that is <strong>20 minutes or shorter</strong>. Longer videos are rejected.</li>
+        <li>
+          Press <span class="pill">Take Notes</span> in the player's bottom-right toolbar, or open the Video Notes popup
+          and click <strong>Take Notes</strong> there.
+        </li>
+        <li>
+          Open the popup to watch progress: Queued → Transcribing → Summarizing → Extracting frames → Publishing → Done.
+        </li>
+        <li>When it finishes, click <strong>View in Notion</strong> (you also get a desktop notification).</li>
+      </ol>
+      <p class="help small-note">Tip: pin Video Notes to the toolbar with the puzzle-piece icon so the popup is one click away.</p>
+    </section>
+
+    <section id="troubleshooting" class="card step-card">
+      <h2>Troubleshooting</h2>
+      <dl class="faq">
+        <dt>The popup says “Not connected”.</dt>
+        <dd>Notion access isn't set up yet. Follow step 2. Connecting the integration inside Notion isn't enough on its own; the secret also has to be pasted into Settings.</dd>
+
+        <dt>“Can't reach the notes server”.</dt>
+        <dd>Docker Desktop isn't running or the server is stopped. Start Docker, then run <code>docker compose up -d</code> in the project folder. Check the address in <a href="options.html">Settings</a>.</dd>
+
+        <dt>I don't see the Take Notes button on YouTube.</dt>
+        <dd>Reload the YouTube tab after installing or reloading the extension. The button only appears on video pages (<code>youtube.com/watch</code>).</dd>
+
+        <dt>A job says “Waiting — retrying in 30s”.</dt>
+        <dd>An external service (Gemini, Notion or YouTube) asked us to slow down. The job retries on its own; no action needed.</dd>
+
+        <dt>A job failed saying the destination wasn't found.</dt>
+        <dd>The destination page isn't shared with your integration. In Notion, open it and add the integration under <strong>⋯ → Connections</strong>.</dd>
+
+        <dt>A job failed with “Video too long”.</dt>
+        <dd>Only videos up to 20 minutes are supported.</dd>
+
+        <dt>I changed the extension's files.</dt>
+        <dd>Go to <code>chrome://extensions</code> and click the reload icon on Video Notes, then reload any YouTube tabs.</dd>
+      </dl>
+    </section>
+
+    <script type="module" src="setup.js"></script>
+  </body>
+</html>

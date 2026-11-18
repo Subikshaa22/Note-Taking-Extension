@@ -109,6 +109,9 @@ class FakeNotion:
         self.uploads: dict[str, str] = {}
         self.fail_next_create_after_commit = False
         self.calls: list[tuple[str, str]] = []
+        # Where the shared parent page sits, and what /search returns (most recently edited first).
+        self.parent_parent: dict = {"type": "workspace"}
+        self.search_results: list[dict] | None = None
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self._handle)
@@ -121,10 +124,14 @@ class FakeNotion:
         if request.method == "GET" and (m := re.fullmatch(r"/pages/([\w-]+)", path)):
             pid = m.group(1)
             if pid == self.parent_id or pid in self.pages:
-                return httpx.Response(200, json={"id": pid, "url": f"https://www.notion.so/{pid}"})
+                parent = self.parent_parent if pid == self.parent_id else self.pages[pid]["parent"]
+                return httpx.Response(200, json={"id": pid, "url": f"https://www.notion.so/{pid}", "parent": parent})
             return httpx.Response(404, json={"message": "not found"})
         if request.method == "POST" and path == "/search":
-            return httpx.Response(200, json={"results": [{"id": self.parent_id, "parent": {"type": "workspace"}}]})
+            results = self.search_results
+            if results is None:
+                results = [{"id": self.parent_id, "parent": self.parent_parent}]
+            return httpx.Response(200, json={"results": results})
         if request.method == "POST" and path == "/file_uploads":
             uid = uuid.uuid4().hex
             self.uploads[uid] = "pending"

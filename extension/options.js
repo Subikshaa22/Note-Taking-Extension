@@ -42,6 +42,11 @@ async function init() {
   $("#parent-id").value = settings.notionParentId;
   $("#redirect-uri").textContent = oauthRedirectUri();
   renderAuthState();
+  // The popup's "Add token" button links here with #token-form.
+  if (location.hash === "#token-form") {
+    $("#token-form").scrollIntoView({ block: "start" });
+    $("#manual-token").focus();
+  }
 }
 
 $("#settings-form").addEventListener("submit", async (event) => {

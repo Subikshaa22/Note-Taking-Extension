@@ -36,7 +36,8 @@ async def resolve_parent(notion: NotionClient, requested_id: str | None, default
     """Return {"type": "page_id"|"database_id", "id": ..., "title_property": ...}.
 
     Order: the job's notion_parent_id, then NOTION_DEFAULT_PARENT_ID, then the most recently
-    edited top-level page the integration can access.
+    edited top-level page the integration can access, then the shared root above the most
+    recently edited page (see _shared_root).
     """
     candidate = requested_id or default_id
     if candidate:
@@ -59,14 +60,45 @@ async def resolve_parent(notion: NotionClient, requested_id: str | None, default
         return {"type": "database_id", "id": database["id"], "title_property": title_prop}
 
     pages = await notion.search_pages()
-    top_level = [p for p in pages if p.get("parent", {}).get("type") == "workspace"]
-    chosen = (top_level or pages or [None])[0]
-    if chosen is None:
+    if not pages:
         raise FatalError(
             ErrorCode.NOTION_NO_DESTINATION,
             "No Notion page is shared with the integration. Share a page or choose a destination in the extension.",
         )
+    top_level = [p for p in pages if p.get("parent", {}).get("type") == "workspace"]
+    if top_level:
+        chosen = top_level[0]
+    else:
+        # Prefer an ordinary page over a database row as the starting point.
+        start = next((p for p in pages if p.get("parent", {}).get("type") != "database_id"), pages[0])
+        chosen = await _shared_root(notion, start)
     return {"type": "page_id", "id": chosen["id"], "title_property": "title"}
+
+
+_MAX_PARENT_HOPS = 20
+
+
+async def _shared_root(notion: NotionClient, page: dict) -> dict:
+    """Walk up from `page` to the highest ancestor the integration can still open.
+
+    Sharing a page with an integration also shares everything inside it, including the notes
+    pages this app creates there. The most recently edited page is therefore often the last
+    notes page; using it as the parent would nest each new note inside the previous one. The
+    page that was actually shared is the one whose parent the integration cannot see.
+    """
+    for _ in range(_MAX_PARENT_HOPS):
+        parent = page.get("parent", {})
+        if parent.get("type") != "page_id":
+            break
+        try:
+            page = await notion.retrieve_page(parent["page_id"])
+        except NotionNotFound:
+            break
+        except FatalError as exc:
+            if exc.code != ErrorCode.NOTION_FORBIDDEN:
+                raise
+            break
+    return page
 
 
 async def _first_block_text(notion: NotionClient, page_id: str) -> str:

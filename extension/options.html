@@ -13,6 +13,7 @@
         <img src="icons/icon32.png" alt="" width="22" height="22" />
         <span>Video Notes — Settings</span>
       </div>
+      <a class="button" href="setup.html">Setup guide</a>
     </header>
 
     <form id="settings-form" class="card" novalidate>
@@ -44,10 +45,17 @@
       <h2>Notion access</h2>
       <p id="auth-state" class="help"></p>
       <p class="help">
-        Prefer <strong>Connect Notion</strong> in the popup (one-time sign-in). If the server has no OAuth app
-        configured, paste an internal integration secret instead (Notion → Settings → Connections → Develop or manage
-        integrations), and share your destination page with that integration.
+        Use <strong>Connect Notion</strong> in the popup if your server has an OAuth app set up. Otherwise, use an
+        integration token:
       </p>
+      <ol class="help steps-list">
+        <li>Create an <strong>Internal</strong> integration at
+          <a href="https://www.notion.so/profile/integrations" target="_blank" rel="noopener">notion.so/profile/integrations</a>
+          and copy its secret (it starts with <code>ntn_</code>).</li>
+        <li>In Notion, open the page your notes should go under and use <strong>⋯ → Connections</strong> to add the
+          integration.</li>
+        <li>Paste the secret below and click <strong>Use this token</strong>.</li>
+      </ol>
       <label for="manual-token">Integration secret</label>
       <input id="manual-token" type="password" placeholder="ntn_…" autocomplete="off" />
       <div class="row">
