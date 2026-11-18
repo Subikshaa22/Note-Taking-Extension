@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # Transcripts longer than this many characters are split into chunks (map/reduce).
     llm_chunk_chars: int = 60_000
     notes_language: str = "English"
-    max_frames: int = 8
+    max_frames: int = 15
     min_frame_gap_sec: int = 10
 
     # --- Global rate limits (shared by all workers through Redis) ----------------------
@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     frame_max_height: int = 720
     frame_timeout_sec: int = 45
     frame_concurrency: int = 3
+    # How frame timestamps are chosen. "visual": scan the video and let the vision model pick,
+    # for every state of the board/slides, the moment where the content is most complete and
+    # least blocked by the presenter. "transcript": trust the transcript-based suggestions only.
+    frame_selection: str = "visual"
+    frame_scan_interval_sec: int = 5
+    frame_scan_max_images: int = 240
+    frame_scan_height: int = 360
+    frame_scan_timeout_sec: int = 600
 
     # --- Notion ---------------------------------------------------------------------
     notion_client_id: str = ""
@@ -91,7 +99,18 @@ class Settings(BaseSettings):
             raise ValueError("RETRY_DELAYS_SEC needs at least one positive delay")
         return value
 
-    @field_validator("max_attempts", "worker_concurrency", "max_frames", "llm_rpm", "notion_rps", "youtube_rpm")
+    @field_validator("frame_selection")
+    @classmethod
+    def _frame_selection(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in ("visual", "transcript"):
+            raise ValueError("FRAME_SELECTION must be 'visual' or 'transcript'")
+        return value
+
+    @field_validator(
+        "max_attempts", "worker_concurrency", "max_frames", "llm_rpm", "notion_rps", "youtube_rpm",
+        "frame_scan_interval_sec", "frame_scan_max_images",
+    )
     @classmethod
     def _at_least_one(cls, value: int) -> int:
         if value < 1:

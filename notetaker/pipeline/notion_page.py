@@ -5,7 +5,8 @@ Layout:
             marker used to find a page created by a crashed worker)
   Summary / Key takeaways
   Notes     one heading per section (linked to that moment in the video), its bullets,
-            then the frames that fall inside the section, each with its LLM caption
+            then the frames that fall inside the section, each preceded by a line with its
+            timestamp (linked to that moment) and captioned with timestamp + description
 """
 from dataclasses import dataclass
 
@@ -67,11 +68,14 @@ def job_marker(job_id: str) -> str:
     return f"Job ID: {job_id}"
 
 
-def _frame_block(frame: PlacedFrame, video_id: str) -> dict:
-    caption = rich_text(
-        format_timestamp(frame.timestamp_sec), canonical_video_url(video_id, frame.timestamp_sec), bold=True
-    ) + rich_text(f" — {frame.caption}")
-    return image(frame.upload_id, caption)
+def _frame_blocks(frame: PlacedFrame, video_id: str) -> list[dict]:
+    """A visible timestamp line (linked to that second of the video), then the image itself,
+    whose caption repeats the timestamp so it stays with the image when copied."""
+    stamp = format_timestamp(frame.timestamp_sec)
+    link = canonical_video_url(video_id, frame.timestamp_sec)
+    label = paragraph(rich_text("🕒 Frame at ") + rich_text(stamp, link, bold=True) + rich_text(" · real frame from the video", color="gray"))
+    caption = rich_text(stamp, link, bold=True) + rich_text(f" — {frame.caption}")
+    return [label, image(frame.upload_id, caption)]
 
 
 def _frames_by_section(sections: list[Section], frames: list[PlacedFrame]) -> list[list[PlacedFrame]]:
@@ -120,10 +124,12 @@ def build_page_blocks(notes: Notes, meta: VideoMeta, frames: list[PlacedFrame], 
                 )
             )
             blocks += [bullet(b) for b in section.bullets]
-            blocks += [_frame_block(f, meta.video_id) for f in section_frames]
+            for f in section_frames:
+                blocks += _frame_blocks(f, meta.video_id)
     elif frames:
         blocks.append(heading(2, rich_text("Key visuals")))
-        blocks += [_frame_block(f, meta.video_id) for f in sorted(frames, key=lambda f: f.timestamp_sec)]
+        for f in sorted(frames, key=lambda f: f.timestamp_sec):
+            blocks += _frame_blocks(f, meta.video_id)
 
     return blocks
 

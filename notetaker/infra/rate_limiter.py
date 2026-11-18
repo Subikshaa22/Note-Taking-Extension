@@ -75,6 +75,14 @@ class Quota:
 WaitCallback = Callable[[float], Awaitable[None]]
 
 
+# A provider can answer a 429 with a retry delay of many hours (e.g. a daily quota). Freezing
+# every worker's calls for that long would stall unrelated jobs silently, so the shared
+# cooldown is capped; anything longer is left to the job's own retry/backoff, which the user
+# can see. Waiters also re-check at least this often, so a cleared cooldown is noticed.
+MAX_COOLDOWN_SEC = 300
+MAX_WAIT_SLICE_SEC = 30
+
+
 class RateLimiter:
     def __init__(self, redis: Redis, prefix: str = "ratelimit"):
         self._redis = redis
@@ -105,16 +113,16 @@ class RateLimiter:
             if on_wait:
                 await on_wait(wait)
             # Jitter spreads out workers that were all told to wait the same amount.
-            await asyncio.sleep(wait + random.uniform(0.05, 0.25))
+            await asyncio.sleep(min(wait, MAX_WAIT_SLICE_SEC) + random.uniform(0.05, 0.25))
 
     async def cooldown(self, service: str, seconds: float) -> None:
         """Pause every worker's calls to `service` (used after an unexpected 429)."""
-        ms = max(int(seconds * 1000), 1)
+        ms = max(int(min(seconds, MAX_COOLDOWN_SEC) * 1000), 1)
         key = self._cooldown_key(service)
         current = await self._redis.pttl(key)
         if current is None or current < ms:
             await self._redis.set(key, "1", px=ms)
-        log.warning("rate-limit cooldown for %s: %.1fs", service, seconds)
+        log.warning("rate-limit cooldown for %s: %.1fs (provider asked for %.1fs)", service, ms / 1000, seconds)
 
 
 class ServiceLimits:

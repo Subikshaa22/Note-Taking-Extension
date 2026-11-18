@@ -6,6 +6,8 @@ from notetaker.domain.status import JobStatus
 from notetaker.pipeline import extract_frames, publish, summarize, transcribe
 from notetaker.pipeline.notion_page import PlacedFrame, build_page_blocks, job_marker
 from notetaker.pipeline.synthesis import chunk_segments, normalize_sections, synthesize, validate_frames
+from notetaker.services.frames import FrameCaptureError, ffmpeg_error_text
+from notetaker.services.youtube import StreamInfo
 from tests.fakes import (
     FakeFrames,
     FakeLLM,
@@ -117,6 +119,15 @@ def test_page_blocks_pair_every_image_with_a_caption():
     for img in images:
         caption = "".join(t["text"]["content"] for t in img["image"]["caption"])
         assert len(caption) > 10
+    # Every image is preceded by a visible timestamp line linking to that moment.
+    for idx, block in enumerate(blocks):
+        if block["type"] == "image":
+            label = blocks[idx - 1]["paragraph"]["rich_text"]
+            stamp = next(t for t in label if t["annotations"]["bold"])
+            caption_stamp = block["image"]["caption"][0]["text"]["content"]
+            assert stamp["text"]["content"] == caption_stamp
+            assert "t=" in stamp["text"]["link"]["url"]
+    assert "02:30" in str(blocks)  # the 150s frame
     # The diagram frame (150s) belongs to the "Diagram" section (starts at 120s).
     types = [b["type"] for b in blocks]
     diagram_heading = next(i for i, b in enumerate(blocks) if b["type"] == "heading_3" and "Diagram" in str(b))
@@ -191,6 +202,56 @@ async def test_frame_stage_resumes_without_recapturing(store, redis):
     await store.save_frame("job-1", 30, b"already captured")
     await extract_frames.run(make_context(store, services, _job()))
     assert frames.calls == [150]
+
+
+class _StaleFirstStream(FakeYouTube):
+    """The first resolved stream URL is unusable; later ones work."""
+
+    resolves = 0
+
+    async def resolve_stream(self, video_id, max_height=None):
+        self.resolves += 1
+        return StreamInfo(url=f"https://stream/{self.resolves}", http_headers={}, height=720)
+
+
+class _FramesFailOnStream(FakeFrames):
+    def __init__(self, bad_urls):
+        super().__init__()
+        self.bad_urls = set(bad_urls)
+
+    async def grab(self, stream, timestamp_sec):
+        if stream.url in self.bad_urls:
+            self.calls.append(timestamp_sec)
+            raise FrameCaptureError("Server returned 403 Forbidden")
+        return await super().grab(stream, timestamp_sec)
+
+
+async def test_all_frames_failing_retries_with_fresh_stream(store, redis):
+    youtube = _StaleFirstStream(VideoMeta(video_id="v", title="T", duration_sec=600))
+    services = await _prepare_notes(store, redis, youtube=youtube,
+                                    frames=_FramesFailOnStream({"https://stream/1"}))
+    result = await extract_frames.run(make_context(store, services, _job()))
+    assert youtube.resolves == 2
+    assert result.fields["warnings"] == []
+    outcomes = await store.frame_outcomes("job-1")
+    assert outcomes[30]["ok"] and outcomes[150]["ok"]
+
+
+async def test_all_frames_failing_on_every_stream_degrades(store, redis):
+    youtube = _StaleFirstStream(VideoMeta(video_id="v", title="T", duration_sec=600))
+    services = await _prepare_notes(store, redis, youtube=youtube,
+                                    frames=_FramesFailOnStream({"https://stream/1", "https://stream/2"}))
+    result = await extract_frames.run(make_context(store, services, _job()))
+    assert youtube.resolves == 2
+    assert [w.timestamp_sec for w in result.fields["warnings"]] == [30, 150]
+    assert "403 Forbidden" in result.fields["warnings"][0].message
+
+
+def test_ffmpeg_error_text_drops_stream_url():
+    stderr = (b"[https @ 0x1] https://rr1---sn.googlevideo.com/videoplayback?expire=1&sig="
+              + b"A" * 400 + b": Server returned 403 Forbidden (access denied)\n")
+    text = ffmpeg_error_text(stderr)
+    assert "googlevideo" not in text and "403 Forbidden" in text
 
 
 async def test_stream_failure_retries_then_degrades_on_last_attempt(store, redis):

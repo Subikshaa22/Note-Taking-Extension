@@ -8,7 +8,7 @@ from notetaker.domain.status import JobStatus, Stage
 from notetaker.infra.broker import Broker, Envelope
 from notetaker.infra.crypto import TokenCipher, TokenCipherError
 from notetaker.infra.lease import JobLease
-from notetaker.infra.rate_limiter import Quota, RateLimiter
+from notetaker.infra.rate_limiter import MAX_COOLDOWN_SEC, MAX_WAIT_SLICE_SEC, Quota, RateLimiter
 
 
 def _job(job_id="j1") -> Job:
@@ -130,6 +130,28 @@ async def test_rate_limiter_cooldown_blocks_everyone(redis):
     await limiter.cooldown("notion", 5)
     wait = await limiter.try_acquire("notion", [(Quota("n", 100, 1), 1)])
     assert 4 <= wait <= 5
+
+
+async def test_rate_limiter_caps_provider_cooldown(redis):
+    # A 429 asking to retry in ~15 hours (daily quota) must not freeze every worker that long.
+    limiter = RateLimiter(redis)
+    await limiter.cooldown("llm:m", 56313)
+    wait = await limiter.try_acquire("llm:m", [(Quota("q", 100, 60), 1)])
+    assert 0 < wait <= MAX_COOLDOWN_SEC
+
+
+async def test_rate_limiter_notices_cleared_cooldown(redis, monkeypatch):
+    limiter = RateLimiter(redis)
+    await limiter.cooldown("svc", 200)
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        await redis.delete("ratelimit:cooldown:svc")  # cooldown lifted while we wait
+
+    monkeypatch.setattr("notetaker.infra.rate_limiter.asyncio.sleep", fake_sleep)
+    await limiter.acquire("svc", [(Quota("q2", 100, 60), 1)])
+    assert len(sleeps) == 1 and sleeps[0] <= MAX_WAIT_SLICE_SEC + 1
 
 
 # ---- Broker / crypto (no RabbitMQ needed) -------------------------------------------------

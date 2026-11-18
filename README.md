@@ -1,8 +1,10 @@
 # Video Notes: YouTube → Notion note-taking agent
 
 Click **Take Notes** on a YouTube video. A distributed backend turns it into structured study notes (summary,
-key takeaways, sectioned bullets) with **real frames captured from the video**, each with an AI-written caption,
-and publishes them as a Notion page.
+key takeaways, sectioned bullets) with **real frames captured from the video**, each labelled with its timestamp
+and an AI-written caption, and publishes them as a Notion page. For whiteboard and slide videos, the frames are
+chosen by scanning the video so that every board state appears once, at its most complete and with the presenter
+blocking as little as possible.
 
 ```mermaid
 flowchart LR
@@ -119,7 +121,10 @@ its default.
 | `WORKER_CONCURRENCY` | `1` | Stage messages each worker processes at once. |
 | `TOKEN_ENCRYPTION_KEY` | dev key in `.env.example` | Fernet key that encrypts Notion tokens in queue messages. Gateway and workers must share it. |
 | `MAX_VIDEO_DURATION_SEC` | `1200` | Constraint A: longer videos are rejected. |
-| `MAX_FRAMES` / `MIN_FRAME_GAP_SEC` | `8` / `10` | Frame budget per video and minimum spacing between frames. |
+| `MAX_FRAMES` / `MIN_FRAME_GAP_SEC` | `15` / `10` | Frame budget per video, and minimum spacing between transcript-chosen frames. |
+| `FRAME_SELECTION` | `visual` | `visual`: scan the video and let the vision model pick, for each board/slide state, the moment where it is most complete and least blocked by the presenter. `transcript`: pick moments from the transcript only (faster, no vision call). Either way the published images are real, unedited frames. |
+| `FRAME_SCAN_INTERVAL_SEC` / `FRAME_SCAN_MAX_IMAGES` | `5` / `240` | Sampling interval of the visual scan; the interval grows if the video would need more samples than the cap. |
+| `FRAME_SCAN_HEIGHT` / `FRAME_SCAN_TIMEOUT_SEC` | `360` / `600` | Resolution of the scan samples (only the model sees them) and time limit for the scan. |
 | `LLM_CHUNK_CHARS` | `60000` | Transcripts longer than this are summarised in chunks and merged. |
 | `NOTES_LANGUAGE` | `English` | Language the notes are written in. |
 | `TRANSCRIPT_LANGUAGES` | `en,en-US,en-GB` | Preferred caption languages (any other language is used as a fallback). |

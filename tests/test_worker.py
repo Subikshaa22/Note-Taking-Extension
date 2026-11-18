@@ -4,7 +4,7 @@ import json
 import pytest
 from cryptography.fernet import Fernet
 
-from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
+from notetaker.domain.errors import ErrorCode, FatalError, LeaseLostError, RateLimitedError, RetryableError
 from notetaker.domain.models import Job, JobResult
 from notetaker.domain.status import JobStatus, Stage
 from notetaker.infra.broker import Broker, Envelope
@@ -182,6 +182,53 @@ async def test_crash_loop_is_dead_lettered(store, make_processor, settings):
     outcome = await processor.process(envelope)
     assert outcome.startswith("dead-lettered")
     assert (await store.get("j1")).status == JobStatus.DEAD_LETTERED
+
+
+def losing_lease():
+    """A stage during which the worker is paused (e.g. the laptop sleeps) and loses its lease."""
+
+    async def handler(ctx):
+        ctx.lease.lost.set()
+        await asyncio.sleep(1)
+
+    return handler
+
+
+async def test_interrupted_attempt_is_not_counted(store, make_processor, settings):
+    processor, _ = make_processor({**all_ok(), Stage.TRANSCRIBE: losing_lease()})
+    envelope = await _new_job(store)
+    await store.update("j1", attempt=settings.max_attempts - 1)  # earlier attempts failed for real
+    with pytest.raises(LeaseLostError):
+        await processor.process(envelope)
+    assert (await store.get("j1")).attempt == settings.max_attempts - 1
+    # The redelivered message still gets its final attempt instead of being dead-lettered.
+    processor._handlers = all_ok()
+    assert await processor.process(envelope) == "completed stage"
+
+
+async def test_interruption_refunds_are_capped(store, make_processor, settings):
+    processor, _ = make_processor({**all_ok(), Stage.TRANSCRIBE: losing_lease()})
+    envelope = await _new_job(store)
+    outcome = None
+    for _ in range(settings.max_attempts + 10):
+        try:
+            outcome = await processor.process(envelope)
+            break
+        except LeaseLostError:
+            continue
+    assert outcome == "dead-lettered: crash budget exhausted"
+
+
+async def test_crash_budget_reports_last_real_failure(store, make_processor, settings):
+    processor, broker = make_processor({**all_ok(), Stage.TRANSCRIBE: raising(RetryableError(ErrorCode.LLM_FAILED, "503 overloaded"))})
+    envelope = await _new_job(store)
+    for _ in range(settings.max_attempts - 1):
+        await processor.process(envelope)
+    await store.increment_attempt("j1")  # last attempt crashed without reporting back
+    assert await processor.process(envelope) == "dead-lettered: crash budget exhausted"
+    job = await store.get("j1")
+    assert job.error.code == ErrorCode.LLM_FAILED
+    assert "503 overloaded" in job.error.message
 
 
 async def test_redelivery_after_crash_waits_for_lease_then_resumes(redis, store, make_processor, settings):

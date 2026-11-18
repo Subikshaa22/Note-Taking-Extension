@@ -6,6 +6,8 @@ Layout (every key expires after JOB_TTL_SEC):
   job:{id}:artifacts    hash   - stage outputs (metadata, transcript, notes, publish state)
   job:{id}:frames       hash   - per-timestamp frame outcome (JSON)
   job:{id}:frame:{ts}   string - captured JPEG bytes
+  job:{id}:scan         hash   - low-res video scan samples for frame selection (short TTL,
+                                 deleted once the frames are chosen)
   idem:{key}            string - Idempotency-Key -> job id
 
 Status changes go through a Lua compare-and-set so that a transition is only applied
@@ -111,6 +113,17 @@ class JobStore:
     async def increment_attempt(self, job_id: str) -> int:
         return int(await self._redis.hincrby(self._key(job_id), "attempt", 1))
 
+    async def refund_attempt(self, job_id: str, max_refunds: int) -> bool:
+        """Give back an attempt that was interrupted (not failed), at most `max_refunds` per job.
+
+        The cap keeps a stage that *always* loses its lease from looping forever.
+        """
+        key = self._key(job_id)
+        if int(await self._redis.hincrby(key, "interruptions", 1)) > max_refunds:
+            return False
+        await self._redis.hincrby(key, "attempt", -1)
+        return True
+
     @staticmethod
     def _dump(fields: dict) -> dict:
         dumped = {}
@@ -171,6 +184,22 @@ class JobStore:
     async def frame_outcomes(self, job_id: str) -> dict[int, dict]:
         raw = await self._redis.hgetall(self._key(job_id, "frames"))
         return {int(ts): json.loads(v) for ts, v in raw.items()}
+
+    # ---- Video scan samples (kept briefly so a retried selection call skips the rescan) ---
+
+    async def save_scan(self, job_id: str, frames: dict[int, bytes], ttl_sec: int) -> None:
+        key = self._key(job_id, "scan")
+        await self._redis.delete(key)
+        if frames:
+            await self._redis.hset(key, mapping={str(ts): base64.b64encode(img).decode("ascii") for ts, img in frames.items()})
+            await self._redis.expire(key, ttl_sec)
+
+    async def load_scan(self, job_id: str) -> dict[int, bytes]:
+        raw = await self._redis.hgetall(self._key(job_id, "scan"))
+        return {int(ts): base64.b64decode(v) for ts, v in raw.items()}
+
+    async def delete_scan(self, job_id: str) -> None:
+        await self._redis.delete(self._key(job_id, "scan"))
 
     # ---- Idempotent submission ---------------------------------------------------------
 

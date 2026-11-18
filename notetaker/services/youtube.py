@@ -97,9 +97,9 @@ class YouTubeClient:
             channel=info.get("channel") or info.get("uploader"),
         )
 
-    async def resolve_stream(self, video_id: str) -> StreamInfo:
+    async def resolve_stream(self, video_id: str, max_height: int | None = None) -> StreamInfo:
         """Pick a progressive/HTTP video stream that ffmpeg can seek into with range requests."""
-        h = self._settings.frame_max_height
+        h = max_height or self._settings.frame_max_height
         selector = (
             f"bv*[height<={h}][vcodec^=avc1][protocol=https]"
             f"/bv*[height<={h}][protocol=https]"

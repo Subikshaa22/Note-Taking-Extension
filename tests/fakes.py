@@ -12,7 +12,7 @@ from notetaker.config import Settings
 from notetaker.domain.models import Job, Notes, Transcript, TranscriptSegment, VideoMeta
 from notetaker.infra.rate_limiter import RateLimiter, ServiceLimits
 from notetaker.pipeline.context import Services, StageContext
-from notetaker.services.frames import FrameCaptureError
+from notetaker.services.frames import FrameCaptureError, ScanFrame
 from notetaker.services.youtube import StreamInfo
 
 
@@ -45,6 +45,14 @@ class FakeLLM:
             raise response
         return schema.model_validate(response)
 
+    async def generate_from_parts(self, parts, schema, on_wait=None, timeout_sec=None, image_resolution="high"):
+        self.image_resolution = image_resolution
+        self.prompts.append(parts)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return schema.model_validate(response)
+
 
 @dataclass
 class FakeYouTube:
@@ -54,7 +62,7 @@ class FakeYouTube:
     async def fetch_metadata(self, video_id):
         return self.meta
 
-    async def resolve_stream(self, video_id):
+    async def resolve_stream(self, video_id, max_height=None):
         if self.stream_error:
             raise self.stream_error
         return StreamInfo(url="https://stream", http_headers={}, height=720)
@@ -75,11 +83,20 @@ class FakeFrames:
     failing: set[int] = field(default_factory=set)
     calls: list[int] = field(default_factory=list)
 
+    scans: int = 0
+    scan_error: Exception | None = None
+
     async def grab(self, stream, timestamp_sec):
         self.calls.append(timestamp_sec)
         if timestamp_sec in self.failing:
             raise FrameCaptureError("decode error")
         return sample_jpeg()
+
+    async def scan(self, stream, interval_sec, height, timeout_sec):
+        self.scans += 1
+        if self.scan_error:
+            raise self.scan_error
+        return [ScanFrame(ts, sample_jpeg()) for ts in range(0, 600, interval_sec)]
 
 
 class FakeNotion:
@@ -144,7 +161,9 @@ class FakeNotion:
 
 
 def make_settings(**overrides) -> Settings:
-    defaults = dict(_env_file=None, max_attempts=3, retry_delays_sec=[1, 2], gemini_api_key="k")
+    defaults = dict(
+        _env_file=None, max_attempts=3, retry_delays_sec=[1, 2], gemini_api_key="k", frame_selection="transcript"
+    )
     return Settings(**{**defaults, **overrides})
 
 

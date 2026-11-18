@@ -30,6 +30,7 @@ const ERRORS = {
   LLM_REQUEST_REJECTED: ["The AI model rejected the request", "The server's model settings may need attention."],
   LLM_BAD_OUTPUT: ["The AI returned unusable notes", "Several attempts produced invalid output."],
   LLM_FAILED: ["The AI service had a problem", "It kept failing; the job was set aside."],
+  LLM_QUOTA_EXHAUSTED: ["Daily AI quota used up", "The notes server's AI key has reached its daily limit. Try again after it resets, or ask the server admin to use a key with a higher quota."],
   NOTION_UNAUTHORIZED: ["Notion access expired", "Reconnect Notion from this popup, then take notes again."],
   NOTION_FORBIDDEN: ["No permission in Notion", "Share the destination page with the integration, or choose another page in Settings."],
   NOTION_PARENT_NOT_FOUND: ["Notion page not found", "Check the destination page in Settings and make sure it's shared with the integration."],

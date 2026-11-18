@@ -1,3 +1,4 @@
+from pydantic import BaseModel
 import io
 
 import httpx
@@ -86,6 +87,39 @@ async def test_gemini_error_classification(limits, redis):
 
     server = await client._classify(genai_errors.APIError(503, {"error": {"message": "overloaded"}}), "m")
     assert isinstance(server, RetryableError) and server.code == ErrorCode.LLM_FAILED
+
+
+async def test_gemini_daily_quota_is_not_retried(limits, redis):
+    client = GeminiClient(Settings(_env_file=None, gemini_api_key="k"), limits)
+    daily = await client._classify(
+        genai_errors.APIError(
+            429,
+            {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "quota", "details": [
+                {"violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]},
+                {"retryDelay": "51771s"},
+            ]}},
+        ),
+        "m",
+    )
+    assert isinstance(daily, FatalError) and daily.code == ErrorCode.LLM_QUOTA_EXHAUSTED
+    assert "15 hours" in daily.message
+
+
+async def test_daily_quota_on_primary_still_tries_fallback(limits, monkeypatch):
+    settings = Settings(_env_file=None, gemini_api_key="k", llm_model="a", llm_fallback_model="b")
+    client = GeminiClient(settings, limits)
+    calls = []
+
+    async def fake(model, *args):
+        calls.append(model)
+        if model == "a":
+            raise FatalError(ErrorCode.LLM_QUOTA_EXHAUSTED, "daily quota used up")
+        raise RetryableError(ErrorCode.LLM_FAILED, "503")
+
+    monkeypatch.setattr(client, "_generate_with", fake)
+    with pytest.raises(RetryableError):  # the fallback's transient error wins: it may clear up
+        await client.generate("p", BaseModel)
+    assert calls == ["a", "b"]
 
 
 def test_gemini_requires_api_key(limits):

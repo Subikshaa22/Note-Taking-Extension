@@ -42,6 +42,9 @@ from notetaker.pipeline.stages import HANDLERS, StageHandler
 
 log = logging.getLogger(__name__)
 
+# Detected interruptions (lease lost while the worker is alive) that do not use up an attempt.
+_MAX_INTERRUPTION_REFUNDS = 3
+
 
 class StageProcessor:
     def __init__(
@@ -109,12 +112,7 @@ class StageProcessor:
 
             attempt = await self._claim(job, envelope.stage)
             if attempt > self._settings.max_attempts:
-                error = JobError(
-                    code=ErrorCode.INTERNAL_ERROR,
-                    message="The job was interrupted too many times (worker crashes).",
-                    stage=envelope.stage.value,
-                )
-                await self._dead_letter(envelope, error, attempt - 1)
+                await self._dead_letter(envelope, await self._crash_budget_error(envelope), attempt - 1)
                 return "dead-lettered: crash budget exhausted"
 
             ctx = StageContext(
@@ -133,7 +131,18 @@ class StageProcessor:
                 return f"failed: {exc.code}"
             except RetryableError as exc:
                 return await self._retry_or_dead_letter(envelope, exc, attempt)
-            except (LeaseLostError, asyncio.CancelledError):
+            except LeaseLostError:
+                # The worker is alive but was paused long enough to lose the job (e.g. the
+                # host went to sleep). That attempt did not fail, so it is not counted.
+                refunded = await self._store.refund_attempt(job.job_id, _MAX_INTERRUPTION_REFUNDS)
+                await self._store.add_event(
+                    job.job_id,
+                    stage=envelope.stage.value,
+                    attempt=attempt,
+                    note="interrupted (lease lost); " + ("attempt not counted" if refunded else "counted"),
+                )
+                raise
+            except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 log.exception("job %s: unexpected error in stage %s", job.job_id, envelope.stage)
@@ -192,6 +201,29 @@ class StageProcessor:
         error = JobError(code=exc.code, message=exc.message, stage=envelope.stage.value)
         await self._store.transition(envelope.job_id, JobStatus.FAILED, error=error, retry=None, detail=None)
 
+    async def _crash_budget_error(self, envelope: Envelope) -> JobError:
+        """Explain a job whose attempts ran out without a final failure being reported.
+
+        Usually the earlier attempts failed with a retryable error and the last one was
+        interrupted, so the most recent recorded failure is the real cause worth showing.
+        """
+        last = next(
+            (e for e in reversed(await self._store.events(envelope.job_id)) if e.get("reason_code")),
+            None,
+        )
+        if last:
+            return JobError(
+                code=last["reason_code"],
+                message=f"{last.get('reason', last['reason_code'])} (gave up after {self._settings.max_attempts} "
+                "attempts; the last one was interrupted)",
+                stage=envelope.stage.value,
+            )
+        return JobError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="The job was interrupted too many times (worker crashes or the computer going to sleep).",
+            stage=envelope.stage.value,
+        )
+
     async def _dead_letter(self, envelope: Envelope, error: JobError, attempts: int) -> None:
         await self._broker.publish_dead_letter(envelope, error, attempts)
         await self._store.transition(envelope.job_id, JobStatus.DEAD_LETTERED, error=error, retry=None, detail=None)
@@ -224,6 +256,11 @@ class StageProcessor:
         )
         await self._store.update(envelope.job_id, retry=retry, detail=None)
         await self._store.add_event(
-            envelope.job_id, stage=envelope.stage.value, attempt=attempt, note=f"retry in {delay}s: {exc.code}"
+            envelope.job_id,
+            stage=envelope.stage.value,
+            attempt=attempt,
+            note=f"retry in {delay}s: {exc.code}",
+            reason_code=exc.code,
+            reason=exc.message[:300],
         )
         return f"retry scheduled in {delay}s ({exc.code})"
