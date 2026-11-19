@@ -15,6 +15,8 @@ class SubmitJobResponse(BaseModel):
     job_id: str
     status: JobStatus
     video_id: str
+    # True when the same video was already being processed and this click joined that job.
+    already_running: bool = False
 
 
 class JobStatusResponse(BaseModel):

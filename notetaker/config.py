@@ -31,13 +31,21 @@ class Settings(BaseSettings):
 
     # --- Jobs, retries and the dead-letter queue -----------------------------------
     max_video_duration_sec: int = 20 * 60
+    # Seconds the gateway spends looking up a video's length to reject over-long videos at
+    # submit time (0 = skip; the worker still enforces the limit).
+    length_precheck_timeout_sec: float = 4.0
     job_ttl_sec: int = 7 * 24 * 3600
     # Per-video cache (transcript, notes, frame choice, frame images) so the same video is fast
     # the second time. 0 turns it off (e.g. to demo the full pipeline on a video used before).
     video_cache_ttl_sec: int = 7 * 24 * 3600
     max_attempts: int = 5
     retry_delays_sec: Annotated[list[int], NoDecode] = [10, 30, 90]
-    lease_ttl_sec: int = 10
+    # Used instead when a provider answers "overloaded" (HTTP 5xx): those spells often last
+    # minutes, so retrying after 10-90 s would just burn through the attempt budget.
+    overload_retry_delays_sec: Annotated[list[int], NoDecode] = [60, 180, 300]
+    # Long enough to ride out brief stalls (heavy CPU, a busy Docker VM), short enough that a
+    # killed worker's job is picked up again within this many seconds.
+    lease_ttl_sec: int = 20
     worker_concurrency: int = 1
     # RabbitMQ-side safety net against messages that crash every worker before they can
     # record an attempt (poison messages). Kept well above max_attempts.
@@ -60,6 +68,9 @@ class Settings(BaseSettings):
     # --- Global rate limits (shared by all workers through Redis) ----------------------
     llm_rpm: int = 10
     llm_tpm: int = 250_000
+    # Requests per model per rolling 24 h (the provider's daily quota); 0 = not enforced.
+    # When reached, the job fails with a clear message instead of the provider answering 429.
+    llm_rpd: int = 0
     notion_rps: int = 3
     youtube_rpm: int = 60
 
@@ -99,17 +110,40 @@ class Settings(BaseSettings):
     fault_youtube_429_rate: float = 0.0
     fault_frame_failure_rate: float = 0.0
 
-    @field_validator("cors_allow_origins", "transcript_languages", "retry_delays_sec", mode="before")
+    @field_validator(
+        "cors_allow_origins", "transcript_languages", "retry_delays_sec", "overload_retry_delays_sec", mode="before"
+    )
     @classmethod
     def _csv(cls, value):
         return _split_csv(value)
 
-    @field_validator("retry_delays_sec")
+    @field_validator("retry_delays_sec", "overload_retry_delays_sec")
     @classmethod
     def _positive_delays(cls, value: list[int]) -> list[int]:
         if not value or any(d <= 0 for d in value):
-            raise ValueError("RETRY_DELAYS_SEC needs at least one positive delay")
+            raise ValueError("retry delay lists need at least one positive delay")
         return value
+
+    @field_validator("llm_rpd")
+    @classmethod
+    def _not_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be >= 0")
+        return value
+
+    @field_validator("notion_default_parent_id")
+    @classmethod
+    def _notion_parent(cls, value: str) -> str:
+        """Accept a pasted page/database link as well as a bare id."""
+        if not value.strip():
+            return ""
+        from notetaker.domain.errors import FatalError
+        from notetaker.domain.identifiers import parse_notion_id
+
+        try:
+            return parse_notion_id(value)
+        except FatalError as exc:
+            raise ValueError(f"NOTION_DEFAULT_PARENT_ID: {exc.message}") from exc
 
     @field_validator("frame_selection")
     @classmethod
@@ -132,12 +166,24 @@ class Settings(BaseSettings):
 
     def retry_delay_for(self, attempt: int) -> int:
         """Backoff before attempt `attempt + 1`; the last delay repeats once the list runs out."""
-        idx = min(max(attempt, 1), len(self.retry_delays_sec)) - 1
-        return self.retry_delays_sec[idx]
+        return _nth_delay(self.retry_delays_sec, attempt)
+
+    def overload_delay_for(self, attempt: int) -> int:
+        return _nth_delay(self.overload_retry_delays_sec, attempt)
+
+    @property
+    def all_retry_delays_sec(self) -> list[int]:
+        """Every delay the broker needs a retry queue for."""
+        return sorted(set(self.retry_delays_sec) | set(self.overload_retry_delays_sec))
 
     @property
     def notion_oauth_enabled(self) -> bool:
         return bool(self.notion_client_id and self.notion_client_secret)
+
+
+def _nth_delay(delays: list[int], attempt: int) -> int:
+    """Backoff before attempt `attempt + 1`; the last delay repeats once the list runs out."""
+    return delays[min(max(attempt, 1), len(delays)) - 1]
 
 
 @lru_cache

@@ -7,7 +7,7 @@ from google.genai import errors as genai_errors
 from PIL import Image
 
 from notetaker.config import Settings
-from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
+from notetaker.domain.errors import ErrorCode, FatalError, OverloadedError, RateLimitedError, RetryableError
 from notetaker.infra.rate_limiter import RateLimiter, ServiceLimits
 from notetaker.services.frames import FrameCaptureError, check_frame
 from notetaker.services.llm import GeminiClient, describe_llm_failure, estimate_tokens
@@ -86,7 +86,20 @@ async def test_gemini_error_classification(limits, redis):
     assert isinstance(auth, FatalError) and auth.code == ErrorCode.LLM_AUTH_FAILED
 
     server = await client._classify(genai_errors.APIError(503, {"error": {"message": "overloaded"}}), "m")
-    assert isinstance(server, RetryableError) and server.code == ErrorCode.LLM_FAILED
+    assert isinstance(server, OverloadedError) and server.code == ErrorCode.LLM_OVERLOADED
+
+    other = await client._classify(genai_errors.APIError(409, {"error": {"message": "conflict"}}), "m")
+    assert type(other) is RetryableError and other.code == ErrorCode.LLM_FAILED
+
+
+async def test_daily_request_budget_fails_fast_before_the_provider_429s(redis):
+    limits = ServiceLimits(RateLimiter(redis), llm_rpm=100, llm_tpm=10**7, notion_rps=100, youtube_rpm=100, llm_rpd=2)
+    await limits.llm("m", 10)
+    await limits.llm("m", 10)
+    with pytest.raises(FatalError) as info:
+        await limits.llm("m", 10)
+    assert info.value.code == ErrorCode.LLM_QUOTA_EXHAUSTED and "24 hours" in info.value.message
+    await limits.llm("other-model", 10)  # each model has its own daily budget
 
 
 async def test_gemini_daily_quota_is_not_retried(limits, redis):

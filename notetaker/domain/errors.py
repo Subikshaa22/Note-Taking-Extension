@@ -32,6 +32,7 @@ class ErrorCode(StrEnum):
     LLM_REQUEST_REJECTED = "LLM_REQUEST_REJECTED"
     LLM_BAD_OUTPUT = "LLM_BAD_OUTPUT"
     LLM_FAILED = "LLM_FAILED"
+    LLM_OVERLOADED = "LLM_OVERLOADED"
     LLM_QUOTA_EXHAUSTED = "LLM_QUOTA_EXHAUSTED"
 
     # Notion
@@ -80,6 +81,14 @@ class RateLimitedError(RetryableError):
         super().__init__(ErrorCode.RATE_LIMITED, message)
         self.service = service
         self.retry_after_sec = retry_after_sec
+
+
+class OverloadedError(RetryableError):
+    """The provider is up but temporarily overloaded (HTTP 5xx). Such spells often last minutes,
+    so these retries wait longer than ordinary ones (OVERLOAD_RETRY_DELAYS_SEC)."""
+
+    def __init__(self, code: ErrorCode, message: str):
+        super().__init__(code, message)
 
 
 class LeaseLostError(Exception):

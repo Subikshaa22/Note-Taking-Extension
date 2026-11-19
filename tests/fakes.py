@@ -87,6 +87,7 @@ class FakeFrames:
 
     scans: int = 0
     scan_error: Exception | None = None
+    scan_failures: int = 0  # the first N scans fail (e.g. a bad stream URL)
 
     async def grab(self, stream, timestamp_sec):
         self.calls.append(timestamp_sec)
@@ -98,6 +99,8 @@ class FakeFrames:
         self.scans += 1
         if self.scan_error:
             raise self.scan_error
+        if self.scans <= self.scan_failures:
+            raise FrameCaptureError("HTTP error 403 Forbidden")
         return [ScanFrame(ts, sample_jpeg()) for ts in range(0, 600, interval_sec)]
 
 

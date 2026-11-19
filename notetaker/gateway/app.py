@@ -44,7 +44,7 @@ def create_app(
             app.state.store = JobStore(redis, settings.job_ttl_sec)
             owned.append(redis.aclose)
         if broker is None:
-            app.state.broker = Broker(settings.amqp_url, settings.retry_delays_sec, settings.queue_delivery_limit)
+            app.state.broker = Broker(settings.amqp_url, settings.all_retry_delays_sec, settings.queue_delivery_limit)
             await retry_until_ready("rabbitmq", app.state.broker.connect)
             owned.append(app.state.broker.close)
         if http is None:

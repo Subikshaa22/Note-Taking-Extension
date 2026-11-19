@@ -3,7 +3,7 @@ import io
 
 from PIL import Image
 
-from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
+from notetaker.domain.errors import ErrorCode, FatalError, OverloadedError, RateLimitedError, RetryableError
 from notetaker.domain.models import FrameSuggestion, Job, Notes, VideoMeta
 from notetaker.pipeline import extract_frames, summarize, transcribe
 from notetaker.pipeline.frame_selection import (
@@ -90,7 +90,7 @@ async def test_selection_falls_back_to_transcript_frames_on_last_attempt(store, 
 
 
 async def test_overloaded_selection_falls_back_on_first_failure_by_default(store, redis):
-    busy = RetryableError(ErrorCode.LLM_FAILED, "503 high demand")
+    busy = OverloadedError(ErrorCode.LLM_OVERLOADED, "The AI service is overloaded (503): high demand")
     services = await _prepare(store, redis, [busy])
     result = await extract_frames.run(make_context(store, services, _job(), attempt=1))
     assert services.frames.calls == [30, 150]  # transcript frames, no retry wait
@@ -167,6 +167,30 @@ async def test_scan_failure_retries_the_stage(store, redis):
         assert exc.code == ErrorCode.YOUTUBE_FAILED
     else:
         raise AssertionError("a failed scan should retry the stage")
+
+
+async def test_scan_runs_during_summarize_and_is_reused(store, redis):
+    frames = FakeFrames()
+    services = await _prepare(store, redis, [_VISUAL_PLAN], frames=frames)
+    assert frames.scans == 1 and await store.load_scan("job-1")  # cached while the notes were written
+    await extract_frames.run(make_context(store, services, _job()))
+    assert frames.scans == 1 and frames.calls == [120, 300]
+
+
+async def test_scan_retries_with_a_fresh_stream_before_failing_the_stage(store, redis):
+    # The first scan hits a bad stream URL; the retry on a freshly resolved one succeeds.
+    frames = FakeFrames(scan_failures=1)
+    services = await _prepare(store, redis, [_VISUAL_PLAN], frames=frames)
+    assert frames.scans == 2
+    await extract_frames.run(make_context(store, services, _job()))
+    assert frames.calls == [120, 300]
+
+
+async def test_failed_early_scan_does_not_fail_the_notes(store, redis):
+    from notetaker.services.frames import FrameCaptureError
+
+    services = await _prepare(store, redis, [_VISUAL_PLAN], frames=FakeFrames(scan_error=FrameCaptureError("403")))
+    assert await store.load_artifact("job-1", "notes", Notes) is not None
 
 
 async def test_empty_visual_plan_means_no_frames(store, redis):

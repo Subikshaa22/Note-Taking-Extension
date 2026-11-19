@@ -1,6 +1,6 @@
 # Full backend: broker, state store, API gateway and a pool of workers.
-#   docker compose up --build                 # 2 workers by default
-#   docker compose up -d --scale worker=4     # scale the pool
+#   docker compose up --build                 # 4 workers by default
+#   docker compose up -d --scale worker=6     # scale the pool
 #   docker kill notetaker-worker-1            # crash a worker mid-job (SIGKILL)
 name: notetaker
 
@@ -62,7 +62,7 @@ services:
       context: .
       target: worker
     deploy:
-      replicas: 2
+      replicas: 4
     stop_grace_period: 30s
 
 volumes:

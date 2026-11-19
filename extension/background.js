@@ -20,23 +20,23 @@ const handlers = {
       throw new ApiError("NOTION_NOT_CONNECTED", "Connect Notion first: click the Video Notes icon in the toolbar.");
     }
     const settings = await getSettings();
-    const payload = {
-      youtube_url: `https://www.youtube.com/watch?v=${videoId}`,
-      notion_token: auth.accessToken,
-      ...(settings.notionParentId ? { notion_parent_id: settings.notionParentId } : {}),
-    };
-    const job = await submitJob(settings.gatewayUrl, payload, idempotencyKey);
-    await addJob({
-      jobId: job.job_id,
-      videoId: job.video_id,
-      title: title || null,
-      status: job.status,
-      progress: 0,
-      submittedAt: Date.now(),
-      gatewayUrl: settings.gatewayUrl,
-    });
-    schedulePolling(0);
-    return { jobId: job.job_id };
+    // The same video clicked again while its job is still running (same gateway and Notion
+    // destination) joins that job instead of starting another. The gateway checks this too.
+    const parentId = settings.notionParentId || "";
+    const running = (await activeJobs()).find(
+      (j) => j.videoId === videoId && j.gatewayUrl === settings.gatewayUrl && (j.notionParentId || "") === parentId,
+    );
+    if (running) return { jobId: running.jobId, alreadyRunning: true };
+    const key = `${settings.gatewayUrl}|${parentId}|${videoId}`;
+    const inFlight = submitting.get(key);
+    if (inFlight) return { ...(await inFlight), alreadyRunning: true };
+    const submission = submitNew(settings, auth, videoId, title, idempotencyKey);
+    submitting.set(key, submission);
+    try {
+      return await submission;
+    } finally {
+      submitting.delete(key);
+    }
   },
 
   async CONNECT_NOTION() {
@@ -78,6 +78,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true; // keeps the channel open for the async response
 });
 
+// Clicks on a video whose submission is still on its way to the gateway wait for it.
+const submitting = new Map();
+
+async function submitNew(settings, auth, videoId, title, idempotencyKey) {
+  const payload = {
+    youtube_url: `https://www.youtube.com/watch?v=${videoId}`,
+    notion_token: auth.accessToken,
+    ...(settings.notionParentId ? { notion_parent_id: settings.notionParentId } : {}),
+  };
+  const job = await submitJob(settings.gatewayUrl, payload, idempotencyKey);
+  await addJob({
+    jobId: job.job_id,
+    videoId: job.video_id,
+    title: title || null,
+    status: job.status,
+    progress: 0,
+    submittedAt: Date.now(),
+    gatewayUrl: settings.gatewayUrl,
+    notionParentId: settings.notionParentId || "",
+  });
+  schedulePolling(0);
+  return { jobId: job.job_id, alreadyRunning: Boolean(job.already_running) };
+}
+
 // ---- Status polling -----------------------------------------------------------------
 
 let pollTimer = null;
@@ -99,6 +123,16 @@ async function pollActiveJobs() {
     await Promise.all(jobs.map(refreshJob));
   } finally {
     polling = false;
+  }
+}
+
+// Notion rejected the token this job was sent with. If it is still the stored one, drop it so
+// the popup offers "Connect Notion" again instead of claiming to be connected. A token saved
+// after the job was submitted (the user already reconnected) is left alone.
+async function forgetRejectedToken(job) {
+  const auth = await getNotionAuth();
+  if (auth?.accessToken && (auth.connectedAt || 0) <= (job.submittedAt || Date.now())) {
+    await clearNotionAuth();
   }
 }
 
@@ -131,6 +165,7 @@ async function refreshJob(job) {
     result: status.result,
     connectionProblem: null,
   };
+  if (status.error?.code === "NOTION_UNAUTHORIZED") await forgetRejectedToken(job);
   // Remember when the current step started, so the popup can show how long it has been running.
   if (!job.detailSince || job.status !== status.status || job.detail !== status.detail) {
     patch.detailSince = Date.now();

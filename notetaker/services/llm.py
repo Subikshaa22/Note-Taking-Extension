@@ -18,7 +18,7 @@ from google.genai import types
 from pydantic import BaseModel, ValidationError
 
 from notetaker.config import Settings
-from notetaker.domain.errors import ErrorCode, FatalError, RateLimitedError, RetryableError
+from notetaker.domain.errors import ErrorCode, FatalError, OverloadedError, RateLimitedError, RetryableError
 from notetaker.infra.rate_limiter import ServiceLimits, WaitCallback
 from notetaker.services.faults import should_inject
 
@@ -228,4 +228,6 @@ class GeminiClient:
             return FatalError(ErrorCode.LLM_REQUEST_REJECTED, f"LLM model '{model}' was not found.")
         if code in (400, 413, 422):
             return FatalError(ErrorCode.LLM_REQUEST_REJECTED, f"LLM rejected the request: {message[:300]}")
+        if code in (500, 502, 503, 504):
+            return OverloadedError(ErrorCode.LLM_OVERLOADED, f"The AI service is overloaded ({code}): {message[:300]}")
         return RetryableError(ErrorCode.LLM_FAILED, f"LLM service error {code}: {message[:300]}")

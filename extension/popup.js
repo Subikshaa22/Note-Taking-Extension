@@ -4,6 +4,7 @@
 import {
   STEPS,
   describeActivity,
+  describeProviderDelay,
   describeError,
   describeWarning,
   formatClock,
@@ -26,7 +27,11 @@ function el(tag, props = {}, children = []) {
 
 async function send(type, payload = {}) {
   const response = await chrome.runtime.sendMessage({ type, ...payload });
-  if (!response?.ok) throw new Error(response?.error?.message || "Something went wrong.");
+  if (!response?.ok) {
+    const error = new Error(response?.error?.message || "Something went wrong.");
+    error.code = response?.error?.code;
+    throw error;
+  }
   return response;
 }
 
@@ -122,9 +127,17 @@ async function renderCurrentTab() {
     button.disabled = true;
     button.textContent = "Sending…";
     try {
-      await send("SUBMIT_JOB", { videoId, title, idempotencyKey: crypto.randomUUID() });
-      button.textContent = "Queued ✓";
+      const { alreadyRunning } = await send("SUBMIT_JOB", { videoId, title, idempotencyKey: crypto.randomUUID() });
+      button.textContent = alreadyRunning ? "Already in progress ✓" : "Queued ✓";
     } catch (error) {
+      if (error.code === "VIDEO_TOO_LONG") {
+        // Refused at once by the gateway; retrying cannot help, so the button stays off.
+        button.textContent = "Too long";
+        const note = $("#current-video-error");
+        note.textContent = error.message;
+        note.hidden = false;
+        return;
+      }
       button.textContent = "Take Notes";
       button.disabled = false;
       renderNotion(error.message);
@@ -163,7 +176,17 @@ function tone(job) {
 function activityText(job) {
   if (job.connectionProblem) return `${job.connectionProblem} Retrying…`;
   if (job.status === "FAILED" || job.status === "DEAD_LETTERED") return "";
+  // A Gemini retry is already explained (with its countdown) on the line under the bar.
+  if (job.retry && describeProviderDelay(job)) return "";
   return describeActivity(job);
+}
+
+// Says plainly when a job is waiting on Google Gemini rather than on this app.
+function renderProviderDelay(line, job) {
+  const delay = job.connectionProblem ? null : describeProviderDelay(job);
+  line.hidden = !delay;
+  if (!delay) return;
+  line.replaceChildren(el("strong", { textContent: `${delay.title}: ` }), delay.text);
 }
 
 function renderJob(job) {
@@ -181,6 +204,7 @@ function renderJob(job) {
   $(".progress-fill", node).style.width = `${isTerminal(job.status) && tone(job) === "error" ? 100 : progress}%`;
   $(".progress", node).setAttribute("aria-valuenow", String(progress));
   $(".activity", node).textContent = activityText(job);
+  renderProviderDelay($(".provider-delay", node), job);
 
   const warnings = job.warnings || [];
   if (warnings.length && isTerminal(job.status)) {
@@ -224,8 +248,10 @@ function renderJobs(jobs) {
 function refreshCountdowns() {
   for (const job of currentJobs) {
     if (isTerminal(job.status) || job.connectionProblem) continue;
-    const node = document.querySelector(`.job[data-job-id="${CSS.escape(job.jobId)}"] .activity`);
-    if (node) node.textContent = activityText(job);
+    const card = document.querySelector(`.job[data-job-id="${CSS.escape(job.jobId)}"]`);
+    if (!card) continue;
+    $(".activity", card).textContent = activityText(job);
+    renderProviderDelay($(".provider-delay", card), job);
   }
 }
 

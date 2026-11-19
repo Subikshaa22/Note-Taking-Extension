@@ -32,7 +32,7 @@ and a Notion account.
 ```bash
 cp .env.example .env          # Windows Command Prompt: copy .env.example .env
 # then set GEMINI_API_KEY in .env (and the Notion OAuth values, see below)
-docker compose up --build -d  # RabbitMQ, Redis, gateway and 2 workers
+docker compose up --build -d  # RabbitMQ, Redis, gateway and 4 workers
 curl http://localhost:8000/healthz
 ```
 
@@ -58,7 +58,7 @@ Base URL: **`http://localhost:8000`** (configurable with `GATEWAY_PORT`).
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/jobs` | Submit `{"youtube_url", "notion_token", "notion_parent_id"?}` → `202` + `Location: /jobs/{id}`. Optional `Idempotency-Key` header. |
+| `POST` | `/jobs` | Submit `{"youtube_url", "notion_token", "notion_parent_id"?}` → `202` + `Location: /jobs/{id}`. Optional `Idempotency-Key` header. If the same video is already being processed for the same Notion account and destination, the running job is returned with `"already_running": true`. |
 | `GET` | `/jobs/{id}` | Read-only status: `status`, `progress`, `video_title`, `duration_sec`, `warnings`, `error`, `result`, plus `detail`, `retry`, `worker_id`, `attempt`. `?include=history` adds the audit trail. `404` if unknown. |
 | `GET` | `/jobs/{id}/results` | Final outcome (`notion_page_url`, `frames_requested`, `frames_published`, warnings). `409` until the job is finished. |
 | `GET` | `/healthz` | Gateway, Redis and RabbitMQ reachability plus queue depths. `503` if anything is down. |
@@ -121,6 +121,7 @@ its default.
 | `LLM_MODEL` | `gemini-3.5-flash` | Primary model. |
 | `LLM_FALLBACK_MODEL` | *(empty)* | Tried when the primary model is rate-limited or overloaded (`.env.example` sets `gemini-3.8-flash`). |
 | `LLM_RPM` / `LLM_TPM` | `10` / `250000` | **Global LLM rate limit** (requests and estimated tokens per minute, per model) shared by all workers. |
+| `LLM_RPD` | `0` | Requests per model per rolling 24 h (your daily quota); `0` = not enforced. When it's used up, jobs fail with a clear "daily quota used up" message instead of getting the provider's 429. |
 | `NOTION_RPS` | `3` | Global Notion request rate. |
 | `YOUTUBE_RPM` | `60` | Global YouTube metadata/transcript request rate. |
 | `NOTION_CLIENT_ID` / `NOTION_CLIENT_SECRET` | *(empty)* | Notion OAuth client credentials (option A above). |
@@ -129,10 +130,12 @@ its default.
 | `REDIS_URL` | `redis://redis:6379/0` | State store connection string. |
 | `MAX_ATTEMPTS` | `5` | Attempts per stage before a job is dead-lettered. |
 | `RETRY_DELAYS_SEC` | `10,30,90` | **Backoff schedule** between attempts; the last delay repeats. |
-| `LEASE_TTL_SEC` | `10` | How quickly a killed worker's job can be taken over. |
+| `OVERLOAD_RETRY_DELAYS_SEC` | `60,180,300` | Backoff used instead when the AI service answers "overloaded" (HTTP 5xx), which often lasts minutes. |
+| `LEASE_TTL_SEC` | `20` | How quickly a killed worker's job can be taken over. A worker that is only paused (e.g. the computer slept) doesn't use up an attempt. |
 | `WORKER_CONCURRENCY` | `1` | Stage messages each worker processes at once. |
 | `TOKEN_ENCRYPTION_KEY` | dev key in `.env.example` | Fernet key that encrypts Notion tokens in queue messages. Gateway and workers must share it. |
 | `MAX_VIDEO_DURATION_SEC` | `1200` | Constraint A: longer videos are rejected. |
+| `LENGTH_PRECHECK_TIMEOUT_SEC` | `4` | Time the gateway spends looking up a video's length so an over-long video is refused at submit (`400 VIDEO_TOO_LONG`, about 1s). `0` skips it; the worker still enforces the limit. |
 | `MAX_FRAMES` / `MIN_FRAME_GAP_SEC` | `15` / `10` | Frame budget per video, and minimum spacing between transcript-chosen frames. |
 | `FRAME_SELECTION` | `visual` | `visual`: scan the video and let the vision model pick, for each board/slide state, the moment where it is most complete and least blocked by the presenter. `transcript`: pick moments from the transcript only (faster, no vision call). Either way the published images are real, unedited frames. |
 | `FRAME_SCAN_INTERVAL_SEC` / `FRAME_SCAN_MAX_IMAGES` | `10` / `120` | Sampling interval of the visual scan; the interval grows if the video would need more samples than the cap. |
@@ -161,9 +164,9 @@ RabbitMQ-side guard against poison messages), `IDEMPOTENCY_TTL_SEC` (86400), `CO
 | **Worker crash** | While a job runs, read its `worker_id` from `GET /jobs/{id}`; the part before the `-` is the container id. Run `docker kill <container-id>` (SIGKILL). | RabbitMQ redelivers the unacked stage to another worker, which takes over within `LEASE_TTL_SEC` and resumes from the last finished stage (`attempt` increments, `worker_id` changes). There's one Notion page in the end. `docker compose up -d` restarts the killed worker. |
 | **Graceful degradation** | `FAULT_FRAME_FAILURE_RATE=0.4` (some frames fail) or `=1` (all fail). | `COMPLETED_WITH_WARNINGS`, a page with the frames that succeeded (or text only), and a warning per missing frame. |
 | **Dead-letter queue** | Submit a private or removed video, e.g. `https://youtu.be/xxxxxxxxxxx`. For a fast demo, set `MAX_ATTEMPTS=3` and `RETRY_DELAYS_SEC=3,6`. | Retries with backoff, then `DEAD_LETTERED`. The message is in `notes.dlq`, which you can inspect in the RabbitMQ UI at <http://localhost:15672> (login `notes` / `notes`). |
-| **Constraint A** | Submit a video longer than 20 minutes. | `FAILED` with `VIDEO_TOO_LONG` before any transcript, LLM or frame work happens. |
+| **Constraint A** | Submit a video longer than 20 minutes. | `400 VIDEO_TOO_LONG` from `POST /jobs` in about a second; no job is queued. If YouTube can't be reached at submit, the worker rejects it as `FAILED / VIDEO_TOO_LONG` before any transcript, LLM or frame work. |
 
-Scale the pool with `docker compose up -d --scale worker=4`.
+Scale the pool with `docker compose up -d --scale worker=N` (default 4).
 
 > **Demo tip:** a video you already processed finishes in seconds because of the per-video cache, which is too fast to kill a worker mid-job. Use a new video, or set `VIDEO_CACHE_TTL_SEC=0` and run `docker compose up -d` before the crash and 429 demos.
 

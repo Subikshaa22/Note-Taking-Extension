@@ -32,6 +32,7 @@
       <div class="current-video-text">
         <span class="eyebrow">On this tab</span>
         <span id="current-video-title" class="current-video-title"></span>
+        <span id="current-video-error" class="notion-hint error" role="alert" hidden></span>
       </div>
       <button id="take-notes-here" class="button primary" type="button">Take Notes</button>
     </section>
@@ -60,6 +61,7 @@
         </div>
         <ol class="steps"></ol>
         <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="progress-fill"></div></div>
+        <p class="provider-delay" role="status" hidden></p>
         <p class="activity"></p>
         <details class="job-notes" hidden>
           <summary class="job-notes-title"></summary>

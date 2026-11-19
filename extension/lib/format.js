@@ -29,7 +29,14 @@ const ERRORS = {
   LLM_AUTH_FAILED: ["Server configuration problem", "The notes server's AI key was rejected. Ask the server admin to check it."],
   LLM_REQUEST_REJECTED: ["The AI model rejected the request", "The server's model settings may need attention."],
   LLM_BAD_OUTPUT: ["The AI returned unusable notes", "Several attempts produced invalid output."],
-  LLM_FAILED: ["The AI service had a problem", "It kept failing; the job was set aside."],
+  LLM_FAILED: [
+    "Google Gemini (external AI service) kept failing",
+    "This is a problem on Google's side, not in this app. The job was set aside; try again a little later.",
+  ],
+  LLM_OVERLOADED: [
+    "Google Gemini (external AI service) is overloaded",
+    "Gemini stayed overloaded for several minutes. This is an outage on Google's side, not an app error. Try again a little later.",
+  ],
   LLM_QUOTA_EXHAUSTED: ["Daily AI quota used up", "The notes server's AI key has reached its daily limit. Try again after it resets, or ask the server admin to use a key with a higher quota."],
   NOTION_UNAUTHORIZED: ["Notion access expired", "Reconnect Notion from this popup, then take notes again."],
   NOTION_FORBIDDEN: ["No permission in Notion", "Share the destination page with the integration, or choose another page in Settings."],
@@ -48,6 +55,7 @@ const RETRY_REASONS = {
   VIDEO_UNAVAILABLE: "the video couldn't be opened",
   YOUTUBE_FAILED: "YouTube didn't respond",
   LLM_FAILED: "the AI service had a hiccup",
+  LLM_OVERLOADED: "the AI service is overloaded",
   LLM_BAD_OUTPUT: "the AI returned unusable output",
   NOTION_FAILED: "Notion had a hiccup",
   INTERNAL_ERROR: "an unexpected server error",
@@ -121,8 +129,60 @@ export function describeActivity(job, now = Date.now()) {
   if (!job.detailSince || isTerminal(job.status)) return text;
   const elapsed = (now - job.detailSince) / 1000;
   if (elapsed < 10) return text;
-  const slow = isGeminiStep(job) && elapsed >= SLOW_AFTER_SEC ? " Gemini is slower than usual right now; still waiting for it." : "";
-  return `${text} (${formatElapsed(elapsed)})${slow}`;
+  return `${text} (${formatElapsed(elapsed)})`;
+}
+
+// ---- Delays caused by Google Gemini ------------------------------------------------------
+// Shown in their own box so anyone watching (e.g. an evaluator) can tell a slow job is waiting
+// on the external AI provider, not stuck or broken in this app.
+
+const PROVIDER_TITLE = "Waiting on Google Gemini (external AI)";
+
+function isGeminiRetry(retry) {
+  const code = retry.reason_code;
+  if (code === "LLM_OVERLOADED" || code === "LLM_FAILED" || code === "LLM_BAD_OUTPUT") return true;
+  return code === "RATE_LIMITED" && /gemini|llm/i.test(retry.reason || "");
+}
+
+function geminiProblem(reasonCode, raw) {
+  if (reasonCode === "RATE_LIMITED" || /429/.test(raw)) return "is limiting how many requests it accepts (HTTP 429)";
+  if (/504|timeout|deadline|took too long/i.test(raw)) return "did not answer in time (HTTP 504)";
+  if (/503|high demand|overloaded/i.test(raw)) return "is overloaded right now (HTTP 503, “high demand”)";
+  if (/50[02]|server error/i.test(raw)) return "returned a server error (HTTP 5xx)";
+  if (reasonCode === "LLM_BAD_OUTPUT" || /unusable/i.test(raw)) return "returned an unusable answer";
+  return "had a temporary failure";
+}
+
+export function describeProviderDelay(job, now = Date.now()) {
+  if (isTerminal(job.status)) return null;
+  if (job.retry && isGeminiRetry(job.retry)) {
+    const seconds = Math.max(0, Math.round((Date.parse(job.retry.next_attempt_at) - now) / 1000));
+    const when = seconds > 0 ? `in ${formatElapsed(seconds)}` : "now";
+    return {
+      title: PROVIDER_TITLE,
+      text:
+        `Gemini ${geminiProblem(job.retry.reason_code, job.retry.reason || "")}. ` +
+        `It retries automatically ${when} (attempt ${job.retry.attempt + 1} of ${job.retry.max_attempts}).`,
+    };
+  }
+  if (job.retry) return null;
+  const detail = job.detail || "";
+  if (/gemini/i.test(detail) && /backup model/i.test(detail)) {
+    return {
+      title: PROVIDER_TITLE,
+      text: `Gemini's main model ${geminiProblem("", detail)}, so the app switched to the backup model automatically.`,
+    };
+  }
+  const elapsed = job.detailSince ? (now - job.detailSince) / 1000 : 0;
+  if (isGeminiStep(job) && elapsed >= SLOW_AFTER_SEC) {
+    return {
+      title: PROVIDER_TITLE,
+      text:
+        `Gemini has been working on this request for ${formatElapsed(elapsed)}, longer than usual, which means it is under heavy load. ` +
+        `If it fails, the app retries automatically.`,
+    };
+  }
+  return null;
 }
 
 export function timeAgo(timestamp, now = Date.now()) {

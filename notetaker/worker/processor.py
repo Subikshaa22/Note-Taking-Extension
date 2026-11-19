@@ -27,6 +27,7 @@ from notetaker.domain.errors import (
     ErrorCode,
     FatalError,
     LeaseLostError,
+    OverloadedError,
     PipelineError,
     RateLimitedError,
     RetryableError,
@@ -240,6 +241,8 @@ class StageProcessor:
             return f"dead-lettered: {exc.code}"
 
         delay = self._settings.retry_delay_for(attempt)
+        if isinstance(exc, OverloadedError):
+            delay = max(delay, self._settings.overload_delay_for(attempt))
         if isinstance(exc, RateLimitedError) and exc.retry_after_sec:
             delay = max(delay, int(exc.retry_after_sec + 0.999))
         delay = self._broker.retry_delay_tier(delay)

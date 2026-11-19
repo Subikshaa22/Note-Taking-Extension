@@ -399,6 +399,18 @@ input {
   color: var(--warning-text);
 }
 
+/* One line under the progress bar when a wait is caused by Gemini, not by the app. */
+.provider-delay {
+  margin: 6px 0 0;
+  color: var(--warning-text);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.provider-delay strong {
+  font-weight: 600;
+}
+
 .notice.error {
   background: var(--error-bg);
   border-color: var(--error-border);

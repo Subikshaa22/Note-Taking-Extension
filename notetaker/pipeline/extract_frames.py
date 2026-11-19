@@ -41,11 +41,19 @@ async def _scan(ctx: StageContext, interval: int, *, quiet: bool = False) -> lis
     settings = ctx.settings
     if not quiet:
         await ctx.report("Scanning the video for board and slide content")
-    stream = await ctx.services.youtube.resolve_stream(ctx.job.video_id, max_height=settings.frame_scan_height)
-    try:
-        scan = await ctx.services.frames.scan(stream, interval, settings.frame_scan_height, settings.frame_scan_timeout_sec)
-    except FrameCaptureError as exc:
-        raise RetryableError(ErrorCode.YOUTUBE_FAILED, f"Could not scan the video: {exc}") from exc
+    # A stream URL sometimes comes back unusable (e.g. HTTP 403 on every request); a freshly
+    # resolved one usually works, so try that before spending a whole stage attempt.
+    for stream_try in range(_STREAM_TRIES):
+        stream = await ctx.services.youtube.resolve_stream(ctx.job.video_id, max_height=settings.frame_scan_height)
+        try:
+            scan = await ctx.services.frames.scan(
+                stream, interval, settings.frame_scan_height, settings.frame_scan_timeout_sec
+            )
+            break
+        except FrameCaptureError as exc:
+            if stream_try + 1 >= _STREAM_TRIES:
+                raise RetryableError(ErrorCode.YOUTUBE_FAILED, f"Could not scan the video: {exc}") from exc
+            log.warning("job %s: video scan failed (%s); retrying with a fresh stream", ctx.job_id, str(exc)[:200])
     await ctx.store.save_scan(ctx.job_id, {f.timestamp_sec: f.image for f in scan}, _SCAN_CACHE_TTL_SEC)
     return scan
 
@@ -76,15 +84,19 @@ def _should_retry_selection(ctx: StageContext, exc: RetryableError | FatalError)
     problems, or while the vision call still has attempts left."""
     if not exc.retryable or ctx.is_last_attempt:
         return False
-    if exc.code == ErrorCode.LLM_FAILED:  # timeout or overload, not a rate limit
+    if exc.code in (ErrorCode.LLM_FAILED, ErrorCode.LLM_OVERLOADED):  # timeout or overload, not a rate limit
         return ctx.attempt < ctx.settings.visual_selection_attempts
     return True
+
+
+async def _needs_visual_plan(ctx: StageContext) -> bool:
+    return ctx.settings.frame_selection == "visual" and not await ctx.store.load_artifact_dict(ctx.job_id, "frame_plan")
 
 
 async def plan_frames(ctx: StageContext, notes: Notes) -> Notes:
     """Choose frame timestamps from the video itself (once per job); returns the notes to use."""
     store, settings, job_id = ctx.store, ctx.settings, ctx.job_id
-    if settings.frame_selection != "visual" or await store.load_artifact_dict(job_id, "frame_plan"):
+    if not await _needs_visual_plan(ctx):
         return notes
     meta = await store.load_artifact(job_id, "meta", VideoMeta)
     if meta is None:

@@ -91,6 +91,87 @@ async def test_idempotency_key_returns_same_job(client, broker):
     assert len(broker.published) == 1
 
 
+async def test_repeated_clicks_on_a_running_video_share_one_job(client, broker):
+    first = await client.post("/jobs", json={"youtube_url": URL, "notion_token": "t"}, headers={"Idempotency-Key": "a"})
+    second = await client.post("/jobs", json={"youtube_url": URL, "notion_token": "t"}, headers={"Idempotency-Key": "b"})
+    assert second.json()["job_id"] == first.json()["job_id"]
+    assert second.json()["already_running"] is True and first.json()["already_running"] is False
+    assert len(broker.published) == 1
+
+
+async def test_same_video_for_another_account_or_page_is_a_separate_job(client, broker):
+    a = await _submit(client)
+    b = await _submit(client, notion_token="someone_else")
+    c = await _submit(client, notion_parent_id="0123456789abcdef0123456789abcdef")
+    assert len({a.json()["job_id"], b.json()["job_id"], c.json()["job_id"]}) == 3
+    assert len(broker.published) == 3
+
+
+async def test_finished_video_can_be_submitted_again(client, broker, store):
+    first = (await _submit(client)).json()["job_id"]
+    await store.transition(first, JobStatus.FAILED)
+    second = (await _submit(client)).json()["job_id"]
+    assert second != first
+    assert len(broker.published) == 2
+
+
+def _watch_page(video_id, seconds):
+    return f'<script>var ytInitialPlayerResponse = {{"videoDetails":{{"videoId":"{video_id}","title":"T","lengthSeconds":"{seconds}"}}}};</script>'
+
+
+async def _app_with_youtube(store, broker, seconds):
+    youtube = httpx.MockTransport(lambda r: httpx.Response(200, text=_watch_page("dQw4w9WgXcQ", seconds)))
+    app = create_app(make_settings(token_encryption_key=KEY), store=store, broker=broker, http=httpx.AsyncClient(transport=youtube))
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def test_over_long_video_is_rejected_at_submit(store, broker):
+    async with await _app_with_youtube(store, broker, 21 * 60) as c:
+        response = await _submit(c)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_TOO_LONG"
+    assert "21:00" in response.json()["error"]["message"]
+    assert not broker.published
+
+
+async def test_video_within_the_limit_is_accepted(store, broker):
+    async with await _app_with_youtube(store, broker, 20 * 60) as c:
+        assert (await _submit(c)).status_code == 202
+    assert len(broker.published) == 1
+
+
+async def test_cached_length_rejects_without_fetching(store, broker):
+    from notetaker.infra.video_cache import VideoCache
+
+    await VideoCache(store.redis, make_settings()).put("dQw4w9WgXcQ", "meta", {"duration_sec": 7000})
+
+    def no_network(request):
+        raise AssertionError("the cached length should be used")
+
+    app = create_app(make_settings(token_encryption_key=KEY), store=store, broker=broker,
+                     http=httpx.AsyncClient(transport=httpx.MockTransport(no_network)))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        assert (await _submit(c)).json()["error"]["code"] == "VIDEO_TOO_LONG"
+
+
+async def test_failed_length_lookup_still_accepts_the_job(store, broker):
+    def down(request):
+        raise httpx.ConnectError("offline")
+
+    app = create_app(make_settings(token_encryption_key=KEY), store=store, broker=broker,
+                     http=httpx.AsyncClient(transport=httpx.MockTransport(down)))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        assert (await _submit(c)).status_code == 202  # the worker still enforces the limit
+
+
+def test_watch_page_length_must_belong_to_the_video():
+    from notetaker.gateway.length_check import parse_watch_page_length
+
+    assert parse_watch_page_length(_watch_page("dQw4w9WgXcQ", 754), "dQw4w9WgXcQ") == 754
+    assert parse_watch_page_length(_watch_page("aaaaaaaaaaa", 754), "dQw4w9WgXcQ") is None
+    assert parse_watch_page_length("<html></html>", "dQw4w9WgXcQ") is None
+
+
 async def test_broker_outage_returns_503(store):
     settings = make_settings(token_encryption_key=KEY)
     app = create_app(settings, store=store, broker=RecordingBroker(fail=True), http=httpx.AsyncClient())

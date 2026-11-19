@@ -112,3 +112,16 @@ def test_settings_parse_csv_env(monkeypatch):
     assert settings.retry_delays_sec == [2, 4, 8]
     assert settings.transcript_languages == ["en", "de"]
     assert [settings.retry_delay_for(n) for n in (1, 2, 3, 4, 9)] == [2, 4, 8, 8, 8]
+
+
+def test_default_notion_parent_accepts_a_pasted_link(monkeypatch):
+    monkeypatch.setenv(
+        "NOTION_DEFAULT_PARENT_ID",
+        "https://www.notion.so/myspace/Study-Notes-0123456789abcdef0123456789abcdef?source=copy_link",
+    )
+    assert Settings(_env_file=None).notion_default_parent_id == "01234567-89ab-cdef-0123-456789abcdef"
+    monkeypatch.setenv("NOTION_DEFAULT_PARENT_ID", "")
+    assert Settings(_env_file=None).notion_default_parent_id == ""
+    monkeypatch.setenv("NOTION_DEFAULT_PARENT_ID", "not a notion id")
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)

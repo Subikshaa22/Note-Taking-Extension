@@ -86,12 +86,16 @@
       response = { ok: false, error: { message: "The extension was updated. Reload this page and try again." } };
     }
 
-    if (response?.ok) {
+    if (response?.ok && response.alreadyRunning) {
+      setButtonState(button, "done", "In progress ✓");
+      showToast("Notes for this video are already being taken; no second job was started. Open the Video Notes icon to follow progress.");
+    } else if (response?.ok) {
       setButtonState(button, "done", "Queued ✓");
       showToast("Taking notes on this video — open the Video Notes icon to follow progress.");
     } else {
       setButtonState(button, "error", "Take Notes");
       showToast(response?.error?.message || "Couldn't start the notes job.", "error");
+      if (response?.error?.code === "VIDEO_TOO_LONG") setButtonState(button, "error", "Too long");
     }
     setTimeout(() => setButtonState(button, "idle", "Take Notes"), 2500);
   }

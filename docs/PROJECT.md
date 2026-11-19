@@ -95,7 +95,7 @@ redelivers its unacknowledged message to another worker, which resumes from the 
 | R1 | §1.1 | Browser extension | `extension/` |
 | R2 | §1.1 | Gateway accepts jobs and exposes status/results, **no pipeline work** | `gateway/routes_jobs.py::submit_job` only validates, records and enqueues |
 | R3 | §1.1 | Durable broker, at-least-once delivery, redelivery on crash | RabbitMQ quorum queue + persistent messages + publisher confirms (`infra/broker.py`); ack is the last step (`worker/processor.py::handle`) |
-| R4 | §1.1 | ≥ 2 independent worker processes | `docker-compose.yml` → `worker: deploy.replicas: 2`, `--scale worker=N` |
+| R4 | §1.1 | ≥ 2 independent worker processes | `docker-compose.yml` → `worker: deploy.replicas: 4`, `--scale worker=N` |
 | R5 | §1.1 | Separate processes/containers | `docker-compose.yml` services: `rabbitmq`, `redis`, `gateway`, `worker` |
 | R6 | §2 | "Take Notes" button in the player toolbar on watch pages | `extension/content.js::sync` (prepends into `.ytp-right-controls`) |
 | R7 | §2 | On click, capture the current video id and send it to the background | `content.js::onClick` → `SUBMIT_JOB` message |
@@ -123,7 +123,7 @@ redelivers its unacknowledged message to another worker, which resumes from the 
 | R29 | §6 | Worker crash → unacked message reassigned; no lost or duplicated jobs; ack after durable completion; stages idempotent | Ack last; job lease; stale-message check; artifact reuse in every stage; Notion page checkpoint + job-id marker reconciliation (`publish.find_existing_page`). Verified live (§8) |
 | R30 | §6 | Graceful degradation: publish whatever frames succeeded; text-only if none | `extract_frames.py` (per-frame outcome, never raises for a frame), `publish.py` (omits failed frames, warns) |
 | R31 | §6 | DLQ after a bounded, configurable, demonstrable number of attempts | `MAX_ATTEMPTS`, `RETRY_DELAYS_SEC`, `notes.dlq`, status `DEAD_LETTERED`. Verified live (§8) |
-| R32 | §7 A | ≤ 20 min supported; longer rejected deterministically without processing | `transcribe._enforce_length` runs on metadata **before** the transcript is fetched → `FAILED / VIDEO_TOO_LONG` |
+| R32 | §7 A | ≤ 20 min supported; longer rejected deterministically without processing | The gateway looks up the length at submit (`gateway/length_check.py`: per-video cache, then the watch page's `lengthSeconds`) and answers `400 VIDEO_TOO_LONG` without queuing; `transcribe._enforce_length` stays the authoritative check on metadata **before** the transcript is fetched → `FAILED / VIDEO_TOO_LONG` |
 | R33 | §7 B | Only real frames; failures omitted, never substituted; every image paired with an LLM caption | ffmpeg capture only, `check_frame` rejects blank/corrupt frames, `validate_frames` / `validate_visual_frames` drop caption-less suggestions and (visual mode) any timestamp the model was not shown, `notion_page._frame_blocks` always sets a caption and a timestamp line; the vision model only chooses seconds, and the timestamp labels it sees are drawn on its low-res scan samples, never on published frames; the page has no thumbnails or embeds |
 | R34 | §8 | Unpacked extension, no build step | Plain JS modules, `Load unpacked` |
 | R35 | §8 | Gateway, broker, ≥ 2 workers in one compose file; scale/stop containers | `docker-compose.yml` |
@@ -153,6 +153,7 @@ redelivers its unacknowledged message to another worker, which resumes from the 
 | FR-13 | Notify the user when a job finishes | ✅ |
 | FR-14 | Expose status, results, health and history over REST | ✅ |
 | FR-15 | Treat repeated clicks with the same idempotency key as one job | ✅ |
+| FR-16 | Clicking a video whose job is still running (same Notion account and destination) joins that job instead of starting another | ✅ |
 | FR-16 | Videos without captions: transcribe the audio instead | ❌ future (§9) |
 
 ## 5. Non-functional requirements
@@ -164,7 +165,7 @@ redelivers its unacknowledged message to another worker, which resumes from the 
 | NFR-3 | **Bounded retries** | `MAX_ATTEMPTS` per stage, exponential backoff, DLQ; repeated crashes also count | ✅ |
 | NFR-4 | **Rate-limit compliance** | Global, atomic limits for the LLM, Notion and YouTube; cooldown on 429 | ✅ verified with a burst |
 | NFR-5 | **Scalability** | Stateless workers; `--scale worker=N`; per-worker concurrency | ✅ |
-| NFR-6 | **Recovery time** | ≤ `LEASE_TTL_SEC` (10s) + stage re-run time after a worker is killed | ✅ (~21s measured with the earlier 20s TTL) |
+| NFR-6 | **Recovery time** | ≤ `LEASE_TTL_SEC` (20s) + stage re-run time after a worker is killed | ✅ (~21s measured with a 20s TTL) |
 | NFR-7 | **Latency** | One LLM call for ≤ 20-min videos, concurrent frame capture via ffmpeg range seeks (≈1–4s per frame measured). Visual frame selection adds one pass over a 360p stream, run in parallel with the summarize call, and one vision call capped at `FRAME_SELECTION_TIMEOUT_SEC` (240s); if the model times out or is overloaded the job falls back to transcript-chosen frames instead of retrying. `FRAME_SELECTION=transcript` skips both | ⚠️ measured on a day Gemini returned 503/504s: a 4-min video took 11 min 18 s before these limits (≈10 min in the vision call and its retries); after them, an 18.6-min video took **6 min 57 s** (≈4 min lost to two Gemini 504s while writing notes; frames 55 s with the scan already done, publish 11 s), i.e. ≈3 min without the 504s |
 | NFR-8 | **Security** | Notion token encrypted in the queue and never stored or logged; OAuth client secret only on the server; a `state` check on OAuth; least-privilege extension permissions; untrusted titles rendered with `textContent` | ✅ (the gateway itself has no auth, see §9) |
 | NFR-9 | **Observability** | Structured logs per component, `/healthz` with queue depths, per-job history (`?include=history`), `worker_id`/`attempt` in the status, RabbitMQ UI | ✅ (no metrics endpoint yet) |
@@ -189,11 +190,11 @@ last column says roughly what that would involve.
 | Worker topology | **Generalist workers**, one queue | Simple, balanced load, any worker can resume any stage | A queue per stage with specialised pools (e.g. more frame workers). Route by `stage` in `Broker.publish_stage` and add a `WORKER_STAGES` setting. |
 | Job state store | **Redis** hashes + Lua compare-and-set | Fast, already needed for leases and rate limits, TTL cleanup, AOF persistence | Postgres (stronger durability, SQL queries, long-term history). Swap `JobStore`. |
 | State machine | Explicit transition table; status changes only through CAS | Illegal or late transitions are impossible; stale messages are detected by comparing stage with status | — |
-| Duplicate protection | Per-job lease (Redis, TTL 10s) + stale-message check + stage artifacts + publish checkpoint + job-id marker on the Notion page | Covers both crashes and "zombie" workers that lost their broker connection | Fencing tokens on all writes; a transactional outbox; a Notion database property as a unique key |
+| Duplicate protection | Per-job lease (Redis, TTL 20s) + stale-message check + stage artifacts + publish checkpoint + job-id marker on the Notion page | Covers both crashes and "zombie" workers that lost their broker connection | Fencing tokens on all writes; a transactional outbox; a Notion database property as a unique key |
 | Global LLM rate limit | **Sliding windows** in Redis (atomic Lua across RPM + TPM, per model); callers wait for a slot | Exact "N per minute" semantics that match provider quotas; no bursts over the limit | A token bucket (smoother, but allows bursts at refill boundaries); re-queue instead of waiting (frees the worker, more messages); a central LLM dispatcher service |
-| 429 handling | Counts toward the stage's attempt budget; delay = max(backoff step, `Retry-After`) | Keeps retries bounded as §6 requires | A separate, larger budget for throttling only |
+| 429 / overload handling | Counts toward the stage's attempt budget; delay = max(backoff step, `Retry-After`). Provider "overloaded" answers (HTTP 5xx) use the longer `OVERLOAD_RETRY_DELAYS_SEC` (60/180/300s). An optional `LLM_RPD` window stops jobs before the provider's daily quota is hit. A lease lost by a live but paused worker (e.g. the host slept) is not counted, up to 3 times per job | Keeps retries bounded as §6 requires while riding out multi-minute overload spells | A separate, larger budget for throttling only |
 | Private/unavailable video | **Retryable**, so it ends in the DLQ after `MAX_ATTEMPTS` | The spec suggests a private video as the natural DLQ trigger; availability can also be transient | Fail fast as `FAILED` (change `classify_ytdlp_error` to return `FatalError`) |
-| Constraint A enforcement | In the worker's first stage, from yt-dlp metadata, before the transcript | Authoritative duration; keeps `POST /jobs` instant as §5 requires | Check at submission (≈2–5s extra on the 202), or trust a duration sent by the extension |
+| Constraint A enforcement | A fast check at submission (cache, then the watch page, ≈1s, capped by `LENGTH_PRECHECK_TIMEOUT_SEC`), with the worker's first stage as the authoritative check from yt-dlp metadata | Over-long videos are refused at once instead of after a wait in the queue; if the lookup fails the job is still accepted and the worker rejects it | Worker-only check (instant 202, but a rejection can wait ≈60s in a busy queue), yt-dlp at submission (≈2–5s), or trust a duration sent by the extension |
 | LLM | **Gemini** via `google-genai`, JSON-schema output, optional fallback model | Long context (a 20-min transcript fits in one call), structured output, carried over from the prototype | Any provider implementing `LLMClient.generate(prompt, schema)` (OpenAI, Claude, a local model) |
 | Frame selection | **Visual** (default): sample the video every 5s at 360p, label each sample with its timestamp, and have the vision model list the board/slide states and pick, per state, the sample where the content is most complete and least blocked by the presenter; then capture those seconds at 720p. Transcript-only mode remains as a setting and as the fallback | The transcript says when something is discussed, not whether it is legible: on whiteboard lectures the presenter often stands in front of the board, and boards are erased and rewritten. Labels inside the samples stop the model from confusing which of ~230 images is which; medium media resolution halves the token cost (≈530 vs ≈1100 per image) | The Gemini YouTube-URL video input (simpler, but bills the whole video and its timestamps are coarser); local person-detection to score occlusion (no model call, but needs a CV model in the worker image) |
 | Transcript source | `youtube-transcript-api` (manual captions, then auto, then any language) | No API key, timestamps included | YouTube Data API captions (OAuth, owner-only); ASR (Whisper/Gemini audio) for videos without captions |
@@ -241,6 +242,8 @@ last column says roughly what that would involve.
 - **Waiting for a rate-limit slot holds a worker.** With a low `LLM_RPM` and many jobs, workers sit in
   "Waiting for LLM capacity" instead of running other stages.
 - Attempts are counted **per stage** and reset when a stage succeeds.
+- **Keep the host awake.** Sleep pauses Docker; the job resumes after wake without losing an attempt, but it does not progress while asleep.
+- The video scan retries once with a freshly resolved stream URL before failing the stage (some URLs return 403 on every request).
 - A frame stage that keeps failing to find a stream degrades to a text-only page on its **last** attempt instead
   of dead-lettering the job.
 - Job state and artifacts expire after `JOB_TTL_SEC` (7 days). The extension then reports the job as unknown.

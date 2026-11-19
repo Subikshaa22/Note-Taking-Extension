@@ -4,7 +4,14 @@ import json
 import pytest
 from cryptography.fernet import Fernet
 
-from notetaker.domain.errors import ErrorCode, FatalError, LeaseLostError, RateLimitedError, RetryableError
+from notetaker.domain.errors import (
+    ErrorCode,
+    FatalError,
+    LeaseLostError,
+    OverloadedError,
+    RateLimitedError,
+    RetryableError,
+)
 from notetaker.domain.models import Job, JobResult
 from notetaker.domain.status import JobStatus, Stage
 from notetaker.infra.broker import Broker, Envelope
@@ -75,7 +82,7 @@ def settings():
 @pytest.fixture
 async def make_processor(redis, store, settings):
     def factory(handlers):
-        broker = FakeBroker(settings.retry_delays_sec)
+        broker = FakeBroker(settings.all_retry_delays_sec)
         processor = StageProcessor(
             redis=redis,
             store=store,
@@ -141,8 +148,19 @@ async def test_retryable_error_schedules_backoff(store, make_processor):
 async def test_rate_limit_respects_retry_after(store, make_processor):
     processor, broker = make_processor({**all_ok(), Stage.TRANSCRIBE: raising(RateLimitedError("llm", "429", 45))})
     await processor.process(await _new_job(store))
-    assert broker.retries[0][1] == 90
+    assert broker.retries[0][1] == 60  # smallest retry queue that covers Retry-After (45s)
     assert (await store.get("j1")).retry.reason_code == ErrorCode.RATE_LIMITED
+
+
+async def test_overloaded_provider_waits_longer(store, make_processor):
+    overloaded = OverloadedError(ErrorCode.LLM_OVERLOADED, "503 high demand")
+    processor, broker = make_processor({**all_ok(), Stage.TRANSCRIBE: raising(overloaded)})
+    envelope = await _new_job(store)
+    await processor.process(envelope)
+    await processor.process(envelope)
+    assert [delay for _, delay in broker.retries] == [60, 180]
+    job = await store.get("j1")
+    assert job.retry.reason_code == ErrorCode.LLM_OVERLOADED and job.status == JobStatus.TRANSCRIBING
 
 
 async def test_exhausted_retries_go_to_dlq(store, make_processor, settings):

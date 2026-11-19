@@ -9,6 +9,8 @@ Layout (every key expires after JOB_TTL_SEC):
   job:{id}:scan         hash   - low-res video scan samples for frame selection (short TTL,
                                  deleted once the frames are chosen)
   idem:{key}            string - Idempotency-Key -> job id
+  active:{key}          string - (video, Notion destination, token hash) -> the job working on it,
+                                 so repeated clicks on the same video share one job
 
 Status changes go through a Lua compare-and-set so that a transition is only applied
 from one of its allowed source states (see domain.status.ALLOWED_TRANSITIONS).
@@ -21,7 +23,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from notetaker.domain.models import Job, utc_now
-from notetaker.domain.status import JobStatus, allowed_sources
+from notetaker.domain.status import TERMINAL_STATUSES, JobStatus, allowed_sources
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -38,6 +40,20 @@ for allowed in string.gmatch(ARGV[2], '[^,]+') do
   end
 end
 return 0
+"""
+
+# Bind KEYS[1] to ARGV[1] unless it already points at a job that is still running; returns
+# that job's id, or nil when the new job took the slot. ARGV[3] is ",TERMINAL,STATUSES,".
+_CLAIM_ACTIVE_LUA = """
+local existing = redis.call('GET', KEYS[1])
+if existing then
+  local status = redis.call('HGET', 'job:' .. existing, 'status')
+  if status and not string.find(ARGV[3], ',' .. status .. ',', 1, true) then
+    return existing
+  end
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+return false
 """
 
 
@@ -68,6 +84,8 @@ class JobStore:
         self._redis = redis
         self._ttl = ttl_sec
         self._transition = redis.register_script(_TRANSITION_LUA)
+        self._claim_active = redis.register_script(_CLAIM_ACTIVE_LUA)
+        self._terminal = "," + ",".join(s.value for s in TERMINAL_STATUSES) + ","
 
     @property
     def redis(self) -> Redis:
@@ -214,8 +232,19 @@ class JobStore:
             return None
         return await self._redis.get(redis_key)
 
+    async def bind_idempotency_key(self, key: str, job_id: str, ttl_sec: int) -> None:
+        await self._redis.set(f"idem:{key}", job_id, ex=ttl_sec)
+
     async def release_idempotency_key(self, key: str) -> None:
         await self._redis.delete(f"idem:{key}")
+
+    async def claim_active(self, key: str, job_id: str, ttl_sec: int) -> str | None:
+        """Make `job_id` the job for `key`, unless an unfinished job already holds it (returned)."""
+        return await self._claim_active(keys=[f"active:{key}"], args=[job_id, ttl_sec, self._terminal])
+
+    async def release_active(self, key: str, job_id: str) -> None:
+        if await self._redis.get(f"active:{key}") == job_id:
+            await self._redis.delete(f"active:{key}")
 
     async def ping(self) -> bool:
         return bool(await self._redis.ping())

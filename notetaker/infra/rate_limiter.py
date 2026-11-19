@@ -11,12 +11,15 @@ another client) pause every worker for the server's Retry-After period.
 """
 import asyncio
 import logging
+import math
 import random
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from redis.asyncio import Redis
+
+from notetaker.domain.errors import ErrorCode, FatalError
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +84,7 @@ WaitCallback = Callable[[float], Awaitable[None]]
 # can see. Waiters also re-check at least this often, so a cleared cooldown is noticed.
 MAX_COOLDOWN_SEC = 300
 MAX_WAIT_SLICE_SEC = 30
+DAY_SEC = 24 * 3600
 
 
 class RateLimiter:
@@ -128,15 +132,37 @@ class RateLimiter:
 class ServiceLimits:
     """Named quota sets for the three external services the pipeline calls."""
 
-    def __init__(self, limiter: RateLimiter, *, llm_rpm: int, llm_tpm: int, notion_rps: int, youtube_rpm: int):
+    def __init__(
+        self,
+        limiter: RateLimiter,
+        *,
+        llm_rpm: int,
+        llm_tpm: int,
+        notion_rps: int,
+        youtube_rpm: int,
+        llm_rpd: int = 0,
+    ):
         self.limiter = limiter
         self._llm_rpm = llm_rpm
         self._llm_tpm = llm_tpm
+        self._llm_rpd = llm_rpd
         self._notion = Quota("notion:requests", notion_rps, 1)
         self._youtube = Quota("youtube:requests", youtube_rpm, 60)
 
     async def llm(self, model: str, estimated_tokens: int, on_wait: WaitCallback | None = None) -> None:
         # Provider quotas are per model, so each model gets its own windows.
+        if self._llm_rpd:
+            # Waiting out a daily quota would hold the worker for hours, so it fails fast
+            # (the caller then tries its fallback model, which has its own quota).
+            daily = Quota(f"llm:{model}:daily", self._llm_rpd, DAY_SEC)
+            wait = await self.limiter.try_acquire(f"llm:{model}:daily", [(daily, 1)])
+            if wait > 0:
+                hours = max(1, math.ceil(wait / 3600))
+                raise FatalError(
+                    ErrorCode.LLM_QUOTA_EXHAUSTED,
+                    f"The daily request budget for {model} ({self._llm_rpd} requests) is used up; "
+                    f"it frees up in about {hours} hour{'s' if hours > 1 else ''}.",
+                )
         await self.limiter.acquire(
             f"llm:{model}",
             [

@@ -38,6 +38,7 @@ def build_limits(redis, settings: Settings) -> ServiceLimits:
         RateLimiter(redis),
         llm_rpm=settings.llm_rpm,
         llm_tpm=settings.llm_tpm,
+        llm_rpd=settings.llm_rpd,
         notion_rps=settings.notion_rps,
         youtube_rpm=settings.youtube_rpm,
     )
@@ -62,7 +63,7 @@ async def run() -> None:
         settings=settings,
     )
 
-    broker = Broker(settings.amqp_url, settings.retry_delays_sec, settings.queue_delivery_limit)
+    broker = Broker(settings.amqp_url, settings.all_retry_delays_sec, settings.queue_delivery_limit)
     await retry_until_ready("rabbitmq", broker.connect)
 
     processor = StageProcessor(
